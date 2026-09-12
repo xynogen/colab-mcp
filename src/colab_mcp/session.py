@@ -13,21 +13,20 @@
 # limitations under the License.
 
 import asyncio
-from collections.abc import AsyncIterator
 import contextlib
-from contextlib import AsyncExitStack
 import logging
-from fastmcp import FastMCP, Client
+import webbrowser
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
+
+from fastmcp import Client, FastMCP
 from fastmcp.client.transports import ClientTransport
 from fastmcp.server.middleware import Middleware, MiddlewareContext
-from fastmcp.server.middleware.tool_injection import ToolInjectionMiddleware
-from fastmcp.server.proxy import FastMCPProxy
 from fastmcp.tools.tool import Tool, ToolResult
 from mcp.client.session import ClientSession
 from mcp.types import TextContent
-import webbrowser
 
-from colab_mcp.websocket_server import ColabWebSocketServer, COLAB, SCRATCH_PATH
+from colab_mcp.websocket_server import COLAB, SCRATCH_PATH, ColabWebSocketServer
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +229,9 @@ def _make_injected_tools(
         )
         return False
 
-    async def add_code_cell_stub(code: str = "", cellIndex: int = 0, language: str = "python") -> str:
+    async def add_code_cell_stub(
+        code: str = "", cellIndex: int = 0, language: str = "python"
+    ) -> str:
         return NOT_CONNECTED_MSG
 
     async def add_text_cell_stub(content: str = "", cellIndex: int = -1) -> str:
