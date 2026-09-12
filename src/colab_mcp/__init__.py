@@ -17,17 +17,16 @@ import asyncio
 import datetime
 import logging
 import os
-import tempfile
 import sys
+import tempfile
 import webbrowser
 
 from fastmcp import FastMCP
 from fastmcp.utilities import logging as fastmcp_logger
 
-from colab_mcp.session import ColabSessionProxy, NOT_CONNECTED_MSG
-from colab_mcp.websocket_server import COLAB, SCRATCH_PATH
 from colab_mcp import process_registry
-
+from colab_mcp.session import NOT_CONNECTED_MSG, ColabSessionProxy
+from colab_mcp.websocket_server import COLAB
 
 mcp = FastMCP(name="ColabMCP")
 
@@ -40,32 +39,64 @@ _colab_client = None  # For runtime API (assign/unassign GPU)
 async def _forward_or_stub(tool_name: str, arguments: dict) -> str:
     """Forward a tool call to the browser if connected, otherwise return stub message."""
     if _proxy_client is not None and _proxy_client.is_connected():
+        assert (
+            _proxy_client.proxy_mcp_client is not None
+        )  # is_connected() guarantees this
         try:
-            result = await _proxy_client.proxy_mcp_client.call_tool(tool_name, arguments)
+            result = await _proxy_client.proxy_mcp_client.call_tool(
+                tool_name, arguments
+            )
             # Extract text from result
-            if hasattr(result, 'content'):
-                return "\n".join(c.text for c in result.content if hasattr(c, 'text'))
+            if hasattr(result, "content"):
+                return "\n".join(c.text for c in result.content if hasattr(c, "text"))
             return str(result)
         except Exception as e:
             return f"Error calling {tool_name}: {e}. Try calling open_colab_browser_connection to reconnect."
     return NOT_CONNECTED_MSG
 
 
+def _build_colab_url(notebook_url: str, wss) -> str:
+    """Merge a Colab notebook URL with the MCP proxy token/port.
+
+    `p=<port>` in the query forces a unique URL per server instance so Chrome can't
+    silently reuse a stale tab (whose fragment points at a dead port). The token/port
+    live in the fragment, which Colab's browser-side code reads as the source of truth.
+    A user-supplied URL's own query/fragment (e.g. #scrollTo=...) is preserved.
+    """
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    # Empty URL -> create a fresh untitled notebook (#create=true), not the
+    # shared scratch empty.ipynb.
+    base = notebook_url.strip() or f"{COLAB}/#create=true"
+    parts = urlsplit(base)
+
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    query.append(("p", str(wss.port)))
+
+    # Fragment is &-joined key=value pairs; append ours after any existing ones.
+    frag = parts.fragment
+    proxy_frag = f"mcpProxyToken={wss.token}&mcpProxyPort={wss.port}"
+    fragment = f"{frag}&{proxy_frag}" if frag else proxy_frag
+
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query), fragment)
+    )
+
+
 @mcp.tool()
-async def open_colab_browser_connection() -> str:
-    """Opens a connection to a Google Colab browser session and unlocks notebook editing tools. Returns whether the connection attempt succeeded."""
+async def open_colab_browser_connection(notebook_url: str = "") -> str:
+    """Opens a connection to a Google Colab browser session and unlocks notebook editing tools.
+
+    Pass a full Colab notebook URL (e.g. https://colab.research.google.com/drive/<id>) to
+    open that notebook; leave empty to create a fresh new notebook. Any query/fragment on
+    the URL is preserved. Returns whether the connection attempt succeeded."""
     if _proxy_client is not None and _proxy_client.is_connected():
         return "Already connected to Colab."
 
     if _proxy_client is None:
         return "Server not initialized. Please wait and try again."
 
-    # `?p=<port>` forces a unique URL per server instance so Chrome can't
-    # silently reuse a stale tab from a prior session (whose fragment points
-    # at a dead port). The fragment remains the source of truth for Colab.
-    webbrowser.open_new(
-        f"{COLAB}{SCRATCH_PATH}?p={_proxy_client.wss.port}#mcpProxyToken={_proxy_client.wss.token}&mcpProxyPort={_proxy_client.wss.port}"
-    )
+    webbrowser.open_new(_build_colab_url(notebook_url, _proxy_client.wss))
 
     # Wait for browser to connect
     await _proxy_client.await_proxy_connection()
@@ -78,10 +109,7 @@ async def open_colab_browser_connection() -> str:
     # Timed out — surface diagnostic info about other running servers so the
     # user can recognize the "old browser tab pointed at a dead port" case.
     try:
-        others = [
-            e for e in process_registry.list_running()
-            if e.pid != os.getpid()
-        ]
+        others = [e for e in process_registry.list_running() if e.pid != os.getpid()]
     except Exception:
         others = []
     my_port = _proxy_client.wss.port
@@ -112,15 +140,21 @@ async def open_colab_browser_connection() -> str:
 
 
 @mcp.tool()
-async def add_code_cell(code: str = "", cellIndex: int = 0, language: str = "python") -> str:
+async def add_code_cell(
+    code: str = "", cellIndex: int = 0, language: str = "python"
+) -> str:
     """Add a new code cell to the Colab notebook. Requires an active browser connection via open_colab_browser_connection."""
-    return await _forward_or_stub("add_code_cell", {"code": code, "cellIndex": cellIndex, "language": language})
+    return await _forward_or_stub(
+        "add_code_cell", {"code": code, "cellIndex": cellIndex, "language": language}
+    )
 
 
 @mcp.tool()
 async def add_text_cell(content: str = "", cellIndex: int = -1) -> str:
     """Add a new text/markdown cell to the Colab notebook. Requires an active browser connection via open_colab_browser_connection."""
-    return await _forward_or_stub("add_text_cell", {"content": content, "cellIndex": cellIndex})
+    return await _forward_or_stub(
+        "add_text_cell", {"content": content, "cellIndex": cellIndex}
+    )
 
 
 @mcp.tool()
@@ -150,7 +184,9 @@ async def delete_cell(cellId: str = "") -> str:
 @mcp.tool()
 async def move_cell(cellId: str = "", cellIndex: int = 0) -> str:
     """Move a cell to a new position in the Colab notebook by cellId and target index. Requires an active browser connection via open_colab_browser_connection."""
-    return await _forward_or_stub("move_cell", {"cellId": cellId, "cellIndex": cellIndex})
+    return await _forward_or_stub(
+        "move_cell", {"cellId": cellId, "cellIndex": cellIndex}
+    )
 
 
 @mcp.tool()
@@ -159,12 +195,13 @@ async def change_runtime(accelerator: str = "T4") -> str:
     if _colab_client is None:
         return "Runtime API not initialized. Start with --client-oauth-config flag pointing to your OAuth client secrets JSON."
     try:
-        from colab_mcp.client import Accelerator, Variant
         import uuid
+
+        from colab_mcp.client import Accelerator, Variant
 
         acc = Accelerator(accelerator)
         variant = Variant.GPU if acc != Accelerator.NONE else Variant.DEFAULT
-        notebook_hash = str(uuid.uuid4())
+        notebook_hash = uuid.uuid4()
 
         # Unassign current VM if any
         try:
@@ -174,9 +211,15 @@ async def change_runtime(accelerator: str = "T4") -> str:
         except Exception:
             pass
 
-        # Assign new VM
+        # Assign new VM. assign() returns either a PostAssignmentResponse
+        # (has .endpoint) or a dict {"assignment": Assignment} when a VM was
+        # already assigned — unwrap both.
         result = _colab_client.assign(notebook_hash, variant, acc)
-        return f"Runtime changed to {accelerator}. Endpoint: {result.endpoint}. Use open_colab_browser_connection to connect to the new runtime."
+        endpoint = getattr(result, "endpoint", None)
+        if endpoint is None and isinstance(result, dict):
+            assignment = result.get("assignment")
+            endpoint = getattr(assignment, "endpoint", None)
+        return f"Runtime changed to {accelerator}. Endpoint: {endpoint}. Use open_colab_browser_connection to connect to the new runtime."
     except Exception as e:
         return f"Failed to change runtime: {e}"
 
@@ -241,6 +284,7 @@ def _print_running_servers() -> None:
         return
     print(f"Found {len(entries)} running colab-mcp server(s):")
     import datetime as _dt
+
     for e in entries:
         started = _dt.datetime.fromtimestamp(e.started_at).strftime("%Y-%m-%d %H:%M:%S")
         print(f"  pid={e.pid:<6}  port={e.port:<6}  host={e.host}  started={started}")
@@ -278,6 +322,7 @@ async def main_async():
         logging.info("enabling session proxy tools")
         _session_mcp = ColabSessionProxy()
         await _session_mcp.start_proxy_server()
+        assert _session_mcp.wss is not None  # set by start_proxy_server()
         _proxy_client = _session_mcp.proxy_client
         # Register ourselves now that we know the port.
         try:
@@ -285,9 +330,7 @@ async def main_async():
                 port=_session_mcp.wss.port,
                 host=_session_mcp.wss.host,
             )
-            logging.info(
-                f"Registered colab-mcp pid={entry.pid} port={entry.port}"
-            )
+            logging.info(f"Registered colab-mcp pid={entry.pid} port={entry.port}")
         except Exception as exc:
             logging.warning(f"Could not register process: {exc}")
 
@@ -295,6 +338,7 @@ async def main_async():
         try:
             from colab_mcp.auth import get_credentials
             from colab_mcp.client import ColabClient, Prod
+
             logging.info("initializing Colab API client with OAuth")
             session = get_credentials(args.client_oauth_config)
             _colab_client = ColabClient(Prod(), session)

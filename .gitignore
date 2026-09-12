@@ -1,2 +1,6 @@
 __pycache__/
 development-methodology/
+
+# Pix Agent
+.pi/
+.pi-lens/
