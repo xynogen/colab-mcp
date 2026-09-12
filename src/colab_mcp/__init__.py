@@ -15,6 +15,7 @@
 import argparse
 import asyncio
 import datetime
+import json
 import logging
 import os
 import sys
@@ -34,6 +35,29 @@ mcp = FastMCP(name="ColabMCP")
 _proxy_client = None
 _session_mcp = None
 _colab_client = None  # For runtime API (assign/unassign GPU)
+
+# In-memory registry of async cell-run jobs. run_cells() spawns a background
+# task (holding the single browser websocket for the whole run) and returns a
+# jobId immediately; get_run_status() reads this dict, never the browser, so
+# polling is instant and decoupled from the blocking run_code_cell round-trip.
+_run_jobs: dict = {}
+_run_job_seq = 0
+
+
+async def _run_cells_job(job_id: str, cell_ids: list) -> None:
+    """Background worker: run each cell in order, record output/errors into the job."""
+    job = _run_jobs[job_id]
+    job["status"] = "running"
+    for cid in cell_ids:
+        job["current"] = cid
+        out = await _forward_or_stub("run_code_cell", {"cellId": cid})
+        job["results"].append({"cellId": cid, "output": out})
+        if out == NOT_CONNECTED_MSG or out.startswith("Error calling"):
+            job["status"] = "error"
+            job["current"] = None
+            return
+    job["status"] = "done"
+    job["current"] = None
 
 
 async def _forward_or_stub(tool_name: str, arguments: dict) -> str:
@@ -139,11 +163,36 @@ async def open_colab_browser_connection(notebook_url: str = "") -> str:
     )
 
 
+async def _index_after(after_cell_id: str) -> int | None:
+    """Resolve an afterCellId to the insert/move index just after it.
+
+    Lets tools take a cellId (the handle the model already has) instead of a
+    fragile integer position. Returns None if the id isn't found. The browser
+    handlers only understand cellIndex, so we translate here via get_cells.
+    """
+    raw = await _forward_or_stub("get_cells", {})
+    try:
+        cells = json.loads(raw).get("cells", [])
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    for i, c in enumerate(cells):
+        if c.get("id") == after_cell_id:
+            return i + 1
+    return None
+
+
 @mcp.tool()
 async def add_code_cell(
-    code: str = "", cellIndex: int = 0, language: str = "python"
+    code: str = "", afterCellId: str = "", language: str = "python", cellIndex: int = 0
 ) -> str:
-    """Add a new code cell to the Colab notebook. Requires an active browser connection via open_colab_browser_connection."""
+    """Add a new code cell. Returns the new cellId. By default appends after afterCellId
+    (the cellId to insert after, from add_code_cell/get_cells); omit it to insert at the
+    top. cellIndex is a legacy positional fallback. Requires an active browser connection."""
+    if afterCellId:
+        idx = await _index_after(afterCellId)
+        if idx is None:
+            return f"No such cellId: {afterCellId}"
+        cellIndex = idx
     return await _forward_or_stub(
         "add_code_cell", {"code": code, "cellIndex": cellIndex, "language": language}
     )
@@ -165,8 +214,70 @@ async def get_cells() -> str:
 
 @mcp.tool()
 async def run_code_cell(cellId: str = "") -> str:
-    """Execute a code cell in the Colab notebook by cellId (from add_code_cell or get_cells). Requires an active browser connection via open_colab_browser_connection."""
+    """Execute a code cell in the Colab notebook by cellId (from add_code_cell or get_cells). Blocks until the cell finishes. Requires an active browser connection via open_colab_browser_connection."""
     return await _forward_or_stub("run_code_cell", {"cellId": cellId})
+
+
+@mcp.tool()
+async def run_cells(cellIds: list[str]) -> str:
+    """Run one or more cells in order WITHOUT blocking. Returns a jobId immediately;
+    poll get_run_status(jobId) for progress and per-cell output. Use this for
+    long-running cells (training, installs) so the agent isn't frozen for the whole
+    run. Requires an active browser connection via open_colab_browser_connection."""
+    global _run_job_seq
+    if _proxy_client is None or not _proxy_client.is_connected():
+        return NOT_CONNECTED_MSG
+    if not cellIds:
+        return "No cellIds provided."
+    _run_job_seq += 1
+    job_id = f"run-{_run_job_seq}"
+    _run_jobs[job_id] = {
+        "status": "pending",
+        "cellIds": list(cellIds),
+        "current": None,
+        "results": [],
+    }
+    asyncio.create_task(_run_cells_job(job_id, list(cellIds)))
+    return json.dumps({"jobId": job_id, "status": "pending", "cellIds": list(cellIds)})
+
+
+@mcp.tool()
+async def get_run_status(jobId: str = "") -> str:
+    """Read the status and captured output of an async run started by run_cells.
+    Returns status (pending|running|done|error), the currently-running cellId, and
+    per-cell outputs collected so far. Reads server memory only — safe to poll."""
+    job = _run_jobs.get(jobId)
+    if job is None:
+        return json.dumps({"error": f"No such jobId: {jobId}"})
+    return json.dumps({"jobId": jobId, **job})
+
+
+@mcp.tool()
+async def run_all_cells() -> str:
+    """Run every code cell in the notebook in order, WITHOUT blocking. Reads the current
+    cell list, then starts an async job like run_cells. Returns a jobId immediately;
+    poll get_run_status(jobId) for progress. Requires an active browser connection."""
+    global _run_job_seq
+    if _proxy_client is None or not _proxy_client.is_connected():
+        return NOT_CONNECTED_MSG
+    raw = await _forward_or_stub("get_cells", {})
+    try:
+        cells = json.loads(raw).get("cells", [])
+    except (json.JSONDecodeError, AttributeError):
+        return f"Could not read cells: {raw}"
+    cell_ids = [c["id"] for c in cells if c.get("cell_type") == "code" and c.get("id")]
+    if not cell_ids:
+        return "No code cells to run."
+    _run_job_seq += 1
+    job_id = f"run-{_run_job_seq}"
+    _run_jobs[job_id] = {
+        "status": "pending",
+        "cellIds": cell_ids,
+        "current": None,
+        "results": [],
+    }
+    asyncio.create_task(_run_cells_job(job_id, cell_ids))
+    return json.dumps({"jobId": job_id, "status": "pending", "cellIds": cell_ids})
 
 
 @mcp.tool()
@@ -182,16 +293,24 @@ async def delete_cell(cellId: str = "") -> str:
 
 
 @mcp.tool()
-async def move_cell(cellId: str = "", cellIndex: int = 0) -> str:
-    """Move a cell to a new position in the Colab notebook by cellId and target index. Requires an active browser connection via open_colab_browser_connection."""
+async def move_cell(cellId: str = "", afterCellId: str = "", cellIndex: int = 0) -> str:
+    """Move a cell (by cellId) to just after afterCellId (another cellId). This is the
+    id-only way to reorder — no index counting. cellIndex is a legacy positional
+    fallback. Requires an active browser connection."""
+    if afterCellId:
+        idx = await _index_after(afterCellId)
+        if idx is None:
+            return f"No such cellId: {afterCellId}"
+        cellIndex = idx
     return await _forward_or_stub(
         "move_cell", {"cellId": cellId, "cellIndex": cellIndex}
     )
 
 
 @mcp.tool()
-async def change_runtime(accelerator: str = "T4") -> str:
-    """Change the Colab runtime to use a specific GPU accelerator. Valid values: NONE, T4, L4, A100. Requires OAuth setup (first time opens browser for consent)."""
+async def runtime_change(accelerator: str = "T4") -> str:
+    """Change the Colab runtime accelerator. Valid values: NONE, T4, L4, A100 (GPU) and
+    V2-8, V5E-1, V6E-1 (TPU). Requires OAuth setup (first time opens browser for consent)."""
     if _colab_client is None:
         return "Runtime API not initialized. Start with --client-oauth-config flag pointing to your OAuth client secrets JSON."
     try:
@@ -200,7 +319,12 @@ async def change_runtime(accelerator: str = "T4") -> str:
         from colab_mcp.client import Accelerator, Variant
 
         acc = Accelerator(accelerator)
-        variant = Variant.GPU if acc != Accelerator.NONE else Variant.DEFAULT
+        if acc == Accelerator.NONE:
+            variant = Variant.DEFAULT
+        elif acc.value.startswith("V"):  # V2-8 / V5E-1 / V6E-1 are TPUs
+            variant = Variant.TPU
+        else:
+            variant = Variant.GPU
         notebook_hash = uuid.uuid4()
 
         # Unassign current VM if any
@@ -222,6 +346,54 @@ async def change_runtime(accelerator: str = "T4") -> str:
         return f"Runtime changed to {accelerator}. Endpoint: {endpoint}. Use open_colab_browser_connection to connect to the new runtime."
     except Exception as e:
         return f"Failed to change runtime: {e}"
+
+
+@mcp.tool()
+async def runtime_status() -> str:
+    """Report Colab account + runtime state in one call: subscription tier, credit
+    balance, hourly burn rate, and every currently-assigned VM (accelerator + endpoint).
+    Use to check whether a GPU/TPU is attached and burning credits. Requires OAuth setup."""
+    if _colab_client is None:
+        return "Runtime API not initialized. Start with --client-oauth-config flag pointing to your OAuth client secrets JSON."
+    status: dict = {}
+    try:
+        status["subscription_tier"] = _colab_client.get_subscription_tier().name
+    except Exception as e:
+        status["subscription_tier"] = f"error: {e}"
+    try:
+        ccu = _colab_client.get_ccu_info()
+        status["credit_balance"] = ccu.current_balance
+        status["consumption_rate_hourly"] = ccu.consumption_rate_hourly
+        status["assignments_count"] = ccu.assignments_count
+    except Exception as e:
+        status["ccu"] = f"error: {e}"
+    try:
+        status["assignments"] = [
+            {"accelerator": a.accelerator.value, "endpoint": a.endpoint}
+            for a in _colab_client.list_assignments()
+        ]
+    except Exception as e:
+        status["assignments"] = f"error: {e}"
+    return json.dumps(status)
+
+
+@mcp.tool()
+async def runtime_stop() -> str:
+    """Unassign (stop) all currently-assigned Colab VMs to halt credit consumption.
+    The off switch for runtime_change. Requires OAuth setup."""
+    if _colab_client is None:
+        return "Runtime API not initialized. Start with --client-oauth-config flag pointing to your OAuth client secrets JSON."
+    try:
+        assignments = _colab_client.list_assignments()
+        if not assignments:
+            return "No runtimes currently assigned."
+        stopped = []
+        for a in assignments:
+            _colab_client.unassign(a.endpoint)
+            stopped.append(a.endpoint)
+        return f"Stopped {len(stopped)} runtime(s): {', '.join(stopped)}"
+    except Exception as e:
+        return f"Failed to stop runtime: {e}"
 
 
 def init_logger(logdir):
@@ -258,7 +430,7 @@ def parse_args(v):
     )
     parser.add_argument(
         "--client-oauth-config",
-        help="Path to OAuth client secrets JSON for Colab API access (enables change_runtime tool).",
+        help="Path to OAuth client secrets JSON for Colab API access (enables runtime_change tool).",
         action="store",
         default=None,
     )

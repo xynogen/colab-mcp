@@ -13,11 +13,13 @@
 # limitations under the License.
 
 import asyncio
-from colab_mcp import session
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 from fastmcp import Client
 from fastmcp.server.middleware import MiddlewareContext
-import pytest
-from unittest.mock import patch, AsyncMock, Mock
+
+from colab_mcp import session
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +66,7 @@ class TestDirectTools:
     @pytest.mark.asyncio
     async def test_mcp_has_expected_tools(self):
         from colab_mcp import mcp
+
         async with Client(mcp) as client:
             tools = await client.list_tools()
             tool_names = {t.name for t in tools}
@@ -76,17 +79,21 @@ class TestDirectTools:
                 "update_cell",
                 "delete_cell",
                 "move_cell",
-                "change_runtime",
+                "runtime_change",
+                "runtime_stop",
+                "run_cells",
+                "get_run_status",
+                "run_all_cells",
+                "runtime_status",
             }
 
     @pytest.mark.asyncio
     async def test_stub_returns_not_connected_when_no_proxy(self):
         from colab_mcp import mcp
+
         async with Client(mcp) as client:
             result = await client.call_tool("add_code_cell", {"code": "print('hi')"})
-            assert any(
-                session.NOT_CONNECTED_MSG in c.text for c in result.content
-            )
+            assert any(session.NOT_CONNECTED_MSG in c.text for c in result.content)
 
 
 class TestAwaitToolsReady:
@@ -111,9 +118,7 @@ class TestAwaitToolsReady:
         client.proxy_mcp_client = AsyncMock()
         mock_tool = Mock()
         mock_tool.name = "run_code_cell"
-        client.proxy_mcp_client.list_tools = AsyncMock(
-            side_effect=[[], [mock_tool]]
-        )
+        client.proxy_mcp_client.list_tools = AsyncMock(side_effect=[[], [mock_tool]])
 
         with patch("colab_mcp.session.TOOLS_READY_POLL_INTERVAL", 0.01):
             result = await client.await_tools_ready()
