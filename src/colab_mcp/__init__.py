@@ -107,6 +107,26 @@ def _build_colab_url(notebook_url: str, wss) -> str:
     )
 
 
+def _default_browser_hint() -> str:
+    """Best-effort name of the OS default browser, so a timeout message can point
+    the user at the right window (the tab opens in the DEFAULT browser, which may
+    not be the one they're looking at)."""
+    if os.environ.get("BROWSER"):
+        return os.environ["BROWSER"]
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["xdg-settings", "get", "default-web-browser"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        ).stdout.strip()
+        return out or "your default browser"
+    except Exception:
+        return "your default browser"
+
+
 @mcp.tool()
 async def open_colab_browser_connection(notebook_url: str = "") -> str:
     """Opens a connection to a Google Colab browser session and unlocks notebook editing tools.
@@ -120,6 +140,11 @@ async def open_colab_browser_connection(notebook_url: str = "") -> str:
     if _proxy_client is None:
         return "Server not initialized. Please wait and try again."
 
+    browser = _default_browser_hint()
+    logging.info(
+        f"Opening Colab tab in {browser}; waiting up to 60s for it to connect "
+        f"back to ws://127.0.0.1:{_proxy_client.wss.port}"
+    )
     webbrowser.open_new(_build_colab_url(notebook_url, _proxy_client.wss))
 
     # Wait for browser to connect
@@ -140,26 +165,25 @@ async def open_colab_browser_connection(notebook_url: str = "") -> str:
     if others:
         peer_ports = ", ".join(f"{e.port} (pid {e.pid})" for e in others)
         return (
-            f"Connection timed out. This server is on port {my_port}, but "
-            f"{len(others)} other colab-mcp server(s) are also running: "
-            f"{peer_ports}. If you have an old Colab tab open, it may be "
+            f"Connection timed out (tab opened in {browser}). This server is on "
+            f"port {my_port}, but {len(others)} other colab-mcp server(s) are also "
+            f"running: {peer_ports}. If you have an old Colab tab open, it may be "
             "pointing at one of those instead of this server. Either close "
             "the old tab and let me open a fresh one, or run `colab-mcp "
             "--kill-stale` to clean up orphaned servers."
         )
     return (
-        f"Connection timed out. This server is on port {my_port}. Common causes:\n"
-        "  1. Stale Colab tab(s) - if Chrome reused an old tab whose URL "
-        "fragment points at a dead port, the tab will say 'Disconnected from "
-        "the local Colab MCP server'. Close every existing colab.research.google.com "
-        "tab, then retry - `?p=<port>` in the URL is used to force Chrome to "
-        "open a fresh tab per server instance.\n"
-        "  2. Local Network Access permission denied - Chrome shows a prompt "
-        "the first time Colab tries to reach localhost. Click 'Allow'. If you "
-        "previously clicked 'Block', open colab.research.google.com -> site "
-        "settings -> reset the 'Insecure content' / 'Other' permission and retry.\n"
-        "  3. Browser tab was never opened - make sure your default browser "
-        "is set and not blocking pop-ups for python.exe."
+        f"Connection timed out. The tab was opened in {browser} (port {my_port}) "
+        "— make sure you're looking at THAT browser, not another one. Common causes:\n"
+        "  1. Wrong/hidden browser - the tab opens in your OS default browser. If "
+        f"that's not where you're looking, either switch to {browser}, or set "
+        "BROWSER=<name> in the MCP server env and restart.\n"
+        "  2. Stale Colab tab - an old tab whose URL points at a dead port shows "
+        "'Disconnected'. Close every colab.research.google.com tab, then retry "
+        "(each server uses a unique `?p=<port>` URL to force a fresh tab).\n"
+        "  3. Local Network Access blocked (Chrome only) - click 'Allow' on the "
+        "prompt; if you clicked 'Block' before, reset it in site settings. "
+        "Firefox/Edge/Zen are unaffected."
     )
 
 

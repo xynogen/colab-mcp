@@ -82,6 +82,14 @@ class ColabProxyClient:
         return self.wss.connection_live.is_set() and self.proxy_mcp_client is not None
 
     async def await_proxy_connection(self):
+        # If a previous connect attempt's start task already finished (e.g. the
+        # browser tab never connected, or a prior connection dropped), reuse is
+        # a no-op that returns instantly and reports "Not connected". Recreate
+        # the task so a retry actually waits the full timeout for a fresh tab.
+        if not self.is_connected() and (
+            self._start_task is None or self._start_task.done()
+        ):
+            self._start_task = asyncio.create_task(self._start_proxy_client())
         with contextlib.suppress(asyncio.TimeoutError):
             # wait for the connection to be live and for the proxy client to fully initialize
             connection_tasks = asyncio.gather(

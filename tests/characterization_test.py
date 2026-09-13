@@ -75,6 +75,11 @@ async def test_run_cells_not_connected_message(disconnected):
 # --- open_colab_browser_connection: guard branches (no browser) ---
 
 
+def test_default_browser_hint_respects_env(monkeypatch):
+    monkeypatch.setenv("BROWSER", "firefox")
+    assert colab_mcp._default_browser_hint() == "firefox"
+
+
 @pytest.mark.asyncio
 async def test_open_connection_uninitialized(monkeypatch):
     monkeypatch.setattr(colab_mcp, "_proxy_client", None)
