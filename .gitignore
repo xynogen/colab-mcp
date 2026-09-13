@@ -4,3 +4,7 @@ development-methodology/
 # Pix Agent
 .pi/
 .pi-lens/
+
+# Coverage
+.coverage
+htmlcov/

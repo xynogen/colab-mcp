@@ -27,7 +27,6 @@ from pathlib import Path
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 EXPECTED_TOOLS = {
@@ -53,10 +52,20 @@ NOTEBOOK_STUBS = {
 }
 
 
-def _green(s): return f"\033[32m{s}\033[0m"
-def _red(s): return f"\033[31m{s}\033[0m"
-def _yellow(s): return f"\033[33m{s}\033[0m"
-def _bold(s): return f"\033[1m{s}\033[0m"
+def _green(s):
+    return f"\033[32m{s}\033[0m"
+
+
+def _red(s):
+    return f"\033[31m{s}\033[0m"
+
+
+def _yellow(s):
+    return f"\033[33m{s}\033[0m"
+
+
+def _bold(s):
+    return f"\033[1m{s}\033[0m"
 
 
 async def smoke_disconnected(client: Client) -> int:
@@ -76,7 +85,7 @@ async def smoke_disconnected(client: Client) -> int:
     if extra:
         print(_yellow(f"  EXTRA (unexpected but not fatal): {sorted(extra)}"))
     if not missing:
-        print(_green(f"  OK — all 9 expected tools present"))
+        print(_green("  OK — all 9 expected tools present"))
 
     print("\n[2/4] Checking execute_cell was removed (rename regression)...")
     if "execute_cell" in tool_names:
@@ -95,7 +104,9 @@ async def smoke_disconnected(client: Client) -> int:
         param_names = sorted(props.keys())
         print(f"  {tool.name}({', '.join(param_names) or '<no params>'})")
 
-    print("\n[4/4] Calling notebook tools while disconnected — expect NOT_CONNECTED_MSG...")
+    print(
+        "\n[4/4] Calling notebook tools while disconnected — expect NOT_CONNECTED_MSG..."
+    )
     test_calls = [
         ("add_code_cell", {"code": "print('hi')"}),
         ("add_text_cell", {"content": "hello"}),
@@ -121,13 +132,17 @@ async def smoke_connected(client: Client) -> int:
     """Interactive E2E: drives a real browser connection. Returns count of failures."""
     failures = 0
     print(_bold("\n=== Connected E2E smoke (interactive) ==="))
-    print(_yellow("This will open a Colab tab in your browser. Sign in and wait for the connection."))
+    print(
+        _yellow(
+            "This will open a Colab tab in your browser. Sign in and wait for the connection."
+        )
+    )
 
     print("\n[1/7] Invoking open_colab_browser_connection (60s timeout)...")
     result = await client.call_tool("open_colab_browser_connection", {})
     text = "\n".join(c.text for c in result.content if hasattr(c, "text"))
     if "Connection successful" in text:
-        print(_green(f"  OK — connection established"))
+        print(_green("  OK — connection established"))
         print(f"    Server reply: {text[:200]}")
     else:
         print(_red(f"  FAIL — connection not established. Reply: {text}"))
@@ -139,7 +154,9 @@ async def smoke_connected(client: Client) -> int:
         return "\n".join(c.text for c in result.content if hasattr(c, "text"))
 
     print("\n[2/7] add_code_cell...")
-    result = await client.call_tool("add_code_cell", {"code": "import sys; print(sys.version)"})
+    result = await client.call_tool(
+        "add_code_cell", {"code": "import sys; print(sys.version)"}
+    )
     add_text = _text(result)
     print(f"    -> {add_text[:300]}")
     # The browser returns {"newCellId": "..."} as the result text (JSON).
@@ -176,7 +193,9 @@ async def smoke_connected(client: Client) -> int:
         print(_green("    OK — run_code_cell executed"))
 
     print(f"\n[5/7] update_cell(cellId={cell_id!r}, content='# updated by E2E')...")
-    result = await client.call_tool("update_cell", {"cellId": cell_id, "content": "# updated by E2E"})
+    result = await client.call_tool(
+        "update_cell", {"cellId": cell_id, "content": "# updated by E2E"}
+    )
     upd_text = _text(result)
     print(f"    -> {upd_text[:300]}")
     if "Error" in upd_text or "Not connected" in upd_text:
@@ -232,7 +251,7 @@ async def main():
 
     print(_bold("\n=== Summary ==="))
     if failures == 0:
-        print(_green(f"All checks passed."))
+        print(_green("All checks passed."))
         sys.exit(0)
     else:
         print(_red(f"{failures} check(s) failed."))
