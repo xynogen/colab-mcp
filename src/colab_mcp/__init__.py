@@ -139,6 +139,10 @@ async def open_colab_browser_connection(notebook_url: str = "") -> str:
     open that notebook; leave empty to create a fresh new notebook. Any query/fragment on
     the URL is preserved. Returns whether the connection attempt succeeded."""
     global _connect_in_flight
+    # Fall back to COLAB_MCP_NOTEBOOK_URL when no URL is passed, so a server can
+    # be pinned to a specific notebook without the caller repeating it. Empty
+    # both -> a fresh untitled notebook (handled downstream by _build_colab_url).
+    notebook_url = notebook_url.strip() or os.environ.get("COLAB_MCP_NOTEBOOK_URL", "")
     if _proxy_client is not None and _proxy_client.is_connected():
         return "Already connected to Colab."
 
@@ -498,6 +502,12 @@ def parse_args(v):
         default=None,
     )
     parser.add_argument(
+        "--notebook-url",
+        help="Default Colab notebook URL to open when the connect tool is called "
+        "without one. Overrides COLAB_MCP_NOTEBOOK_URL.",
+        default=None,
+    )
+    parser.add_argument(
         "--list-running",
         help="List all currently-running colab-mcp servers and exit.",
         action="store_true",
@@ -536,6 +546,8 @@ async def main_async():
         os.environ["COLAB_MCP_PORT"] = str(args.port)
     if args.token is not None:
         os.environ["COLAB_MCP_TOKEN"] = args.token
+    if args.notebook_url is not None:
+        os.environ["COLAB_MCP_NOTEBOOK_URL"] = args.notebook_url
 
     # Diagnostic / cleanup flags exit early.
     if args.list_running:

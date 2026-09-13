@@ -108,6 +108,37 @@ def test_cli_port_token_flags():
     assert b.port is None and b.token is None
 
 
+def test_cli_notebook_url_flag():
+    a = colab_mcp.parse_args(["--notebook-url", "https://x/drive/abc"])
+    assert a.notebook_url == "https://x/drive/abc"
+    assert colab_mcp.parse_args([]).notebook_url is None
+
+
+@pytest.mark.asyncio
+async def test_open_connection_uses_env_notebook_url(monkeypatch):
+    # No URL passed + env set -> the env URL is what gets opened.
+    monkeypatch.setenv("COLAB_MCP_NOTEBOOK_URL", "https://col/drive/envnb")
+
+    async def never(*_):
+        return None
+
+    opened = {}
+    proxy = SimpleNamespace(
+        is_connected=lambda: False,
+        wss=SimpleNamespace(port=40000, token="tok"),
+        await_proxy_connection=never,
+    )
+    monkeypatch.setattr(colab_mcp, "_proxy_client", proxy)
+    monkeypatch.setattr(colab_mcp, "_connect_in_flight", False)
+    monkeypatch.setattr(colab_mcp.process_registry, "prune_dead", lambda: 0)
+    monkeypatch.setattr(colab_mcp.process_registry, "list_running", lambda: [])
+    monkeypatch.setattr(
+        colab_mcp.webbrowser, "open_new", lambda url: opened.setdefault("url", url)
+    )
+    await colab_mcp.open_colab_browser_connection.fn()
+    assert "envnb" in opened["url"]
+
+
 @pytest.mark.asyncio
 async def test_open_connection_uninitialized(monkeypatch):
     monkeypatch.setattr(colab_mcp, "_proxy_client", None)
