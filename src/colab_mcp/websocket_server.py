@@ -233,18 +233,19 @@ class ColabWebSocketServer:
         )
 
     async def __aenter__(self):
+        fallback = False
         try:
             self._server = await self._serve(self._bind_port)
         except OSError as exc:
             # Persisted/requested port is taken by another live server; fall
             # back to a random one so we still start (that other server owns
-            # the identity for now).
+            # the identity for now, so we won't overwrite it).
             if self._bind_port == 0:
                 raise
             logging.warning(
                 f"Port {self._bind_port} unavailable ({exc}); using a random port."
             )
-            self._bind_port = 0
+            fallback = True
             self._server = await self._serve(0)
 
         # Defense against the dual-stack bind bug: with host="localhost"
@@ -273,11 +274,12 @@ class ColabWebSocketServer:
             logging.info(f"WebSocket server listening on {sock.getsockname()}")
         logging.info(f"Colab tab will connect via ws://localhost:{self.port}")
 
-        # Persist this port+token so the next server run reuses them and a Colab
-        # tab reconnects on its own after a reload. Only when we actually bound
-        # our intended port (not the random fallback), so we don't overwrite a
-        # still-live peer's identity.
-        if self._bind_port != 0:
+        # Persist the actual bound port + token so the next server run reuses
+        # them and a Colab tab reconnects on its own after a reload. This
+        # includes the first-ever run (bound a random port) so identity gets
+        # created. Skip only when we fell back because our intended port was
+        # taken by a live peer — that peer owns the identity.
+        if not fallback:
             from colab_mcp import process_registry
 
             process_registry.save_identity(self.port, self.token)

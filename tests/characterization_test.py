@@ -118,6 +118,25 @@ def test_wss_reuses_persisted_identity(monkeypatch, tmp_path):
     assert w.token == "persisted-tok"
 
 
+@pytest.mark.asyncio
+async def test_wss_first_run_persists_identity(monkeypatch, tmp_path):
+    # No env, no prior identity -> binds a random port, and MUST persist it so
+    # the next run reconnects on the same address.
+    from colab_mcp import process_registry
+    from colab_mcp.websocket_server import ColabWebSocketServer
+
+    monkeypatch.delenv("COLAB_MCP_PORT", raising=False)
+    monkeypatch.delenv("COLAB_MCP_TOKEN", raising=False)
+    monkeypatch.setattr(process_registry, "_registry_dir", lambda: tmp_path)
+    assert process_registry.load_identity() == {}
+    async with ColabWebSocketServer() as w:
+        assert w.port != 0
+        assert process_registry.load_identity() == {
+            "port": w.port,
+            "token": w.token,
+        }
+
+
 def test_wss_port_token_env_override(monkeypatch):
     from colab_mcp.websocket_server import ColabWebSocketServer
 
