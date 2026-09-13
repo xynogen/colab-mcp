@@ -96,6 +96,19 @@ async def test_open_connection_already_connected(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_open_connection_rejects_second_in_flight(monkeypatch):
+    # A connect is already waiting -> a second call must not open another tab.
+    proxy = SimpleNamespace(
+        is_connected=lambda: False,
+        wss=SimpleNamespace(port=40000, token="tok"),
+    )
+    monkeypatch.setattr(colab_mcp, "_proxy_client", proxy)
+    monkeypatch.setattr(colab_mcp, "_connect_in_flight", True)
+    out = await colab_mcp.open_colab_browser_connection.fn()
+    assert "already in progress" in out
+
+
+@pytest.mark.asyncio
 async def test_open_connection_timeout_reports_peers(monkeypatch):
     # Never connects; a peer server exists -> the "other servers running" branch.
     async def never(*_):

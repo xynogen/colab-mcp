@@ -43,6 +43,10 @@ _colab_client = None  # For runtime API (assign/unassign GPU)
 _run_jobs: dict = {}
 _run_job_seq = 0
 
+# Guards against a second open_colab_browser_connection call spawning another
+# browser tab while the first is still waiting for the tab to connect back.
+_connect_in_flight = False
+
 
 async def _run_cells_job(job_id: str, cell_ids: list) -> None:
     """Background worker: run each cell in order, record output/errors into the job."""
@@ -134,21 +138,41 @@ async def open_colab_browser_connection(notebook_url: str = "") -> str:
     Pass a full Colab notebook URL (e.g. https://colab.research.google.com/drive/<id>) to
     open that notebook; leave empty to create a fresh new notebook. Any query/fragment on
     the URL is preserved. Returns whether the connection attempt succeeded."""
+    global _connect_in_flight
     if _proxy_client is not None and _proxy_client.is_connected():
         return "Already connected to Colab."
 
     if _proxy_client is None:
         return "Server not initialized. Please wait and try again."
 
+    # #2 Reuse tab in-flight: a second call while the first is still waiting
+    # would spawn a duplicate tab that steals focus and confuses the user.
+    if _connect_in_flight:
+        return (
+            "A connection attempt is already in progress — a Colab tab was just "
+            "opened and is waiting to connect. Check your browser (and accept any "
+            "Local Network Access prompt) instead of opening another tab."
+        )
+
+    # #5 Self-heal: drop dead peer servers from the registry before opening a
+    # tab, so timeout diagnostics don't blame orphans that no longer exist.
+    try:
+        process_registry.prune_dead()
+    except Exception:
+        pass
+
     browser = _default_browser_hint()
     logging.info(
         f"Opening Colab tab in {browser}; waiting up to 60s for it to connect "
         f"back to ws://127.0.0.1:{_proxy_client.wss.port}"
     )
-    webbrowser.open_new(_build_colab_url(notebook_url, _proxy_client.wss))
-
-    # Wait for browser to connect
-    await _proxy_client.await_proxy_connection()
+    _connect_in_flight = True
+    try:
+        webbrowser.open_new(_build_colab_url(notebook_url, _proxy_client.wss))
+        # Wait for browser to connect
+        await _proxy_client.await_proxy_connection()
+    finally:
+        _connect_in_flight = False
 
     if _proxy_client.is_connected():
         tool_names = await _proxy_client.await_tools_ready()
