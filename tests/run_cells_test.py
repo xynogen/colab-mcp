@@ -52,7 +52,7 @@ async def test_run_cells_not_connected(monkeypatch):
 async def test_run_cells_empty_list(monkeypatch):
     monkeypatch.setattr(colab_mcp, "_proxy_client", _connected_proxy())
     out = await colab_mcp.cells_run.fn([])
-    assert "No cellIds" in out
+    assert "No cell_ids" in out
 
 
 @pytest.mark.asyncio
@@ -131,8 +131,8 @@ async def test_add_code_cell_after_id(monkeypatch):
         return "{}"
 
     monkeypatch.setattr(colab_mcp, "_forward_or_stub", fake_forward)
-    await colab_mcp.cell_add_code.fn(code="x", afterCellId="a")
+    await colab_mcp.cell_add_code.fn(code="x", after_cell_id="a")
     assert sent["add_code_cell"]["cellIndex"] == 1  # resolved from id "a"
 
-    bad = await colab_mcp.cell_add_code.fn(code="x", afterCellId="nope")
-    assert "No such cellId" in bad
+    bad = await colab_mcp.cell_add_code.fn(code="x", after_cell_id="nope")
+    assert "No such cell_id" in bad

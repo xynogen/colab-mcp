@@ -60,10 +60,10 @@ async def test_notebook_tools_not_connected(disconnected):
     assert await colab_mcp.cell_add_code.fn(code="x") == msg
     assert await colab_mcp.cell_add_text.fn(content="x") == msg
     assert await colab_mcp.cells_get.fn() == msg
-    assert await colab_mcp.cell_run.fn(cellId="c") == msg
-    assert await colab_mcp.cell_update.fn(cellId="c", content="x") == msg
-    assert await colab_mcp.cell_delete.fn(cellId="c") == msg
-    assert await colab_mcp.cell_move.fn(cellId="c") == msg
+    assert await colab_mcp.cell_run.fn(cell_id="c") == msg
+    assert await colab_mcp.cell_update.fn(cell_id="c", content="x") == msg
+    assert await colab_mcp.cell_delete.fn(cell_id="c") == msg
+    assert await colab_mcp.cell_move.fn(cell_id="c") == msg
 
 
 @pytest.mark.asyncio

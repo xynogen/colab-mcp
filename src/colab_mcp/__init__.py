@@ -76,7 +76,9 @@ async def _forward_or_stub(tool_name: str, arguments: dict) -> str:
             )
             # Extract text from result
             if hasattr(result, "content"):
-                return "\n".join(c.text for c in result.content if hasattr(c, "text"))
+                return "\n".join(
+                    t for c in result.content if (t := getattr(c, "text", None))
+                )
             return str(result)
         except Exception as e:
             return f"Error calling {tool_name}: {e}. Try calling open_colab_browser_connection to reconnect."
@@ -235,26 +237,29 @@ async def _index_after(after_cell_id: str) -> int | None:
 
 @mcp.tool()
 async def cell_add_code(
-    code: str = "", afterCellId: str = "", language: str = "python", cellIndex: int = 0
+    code: str = "",
+    after_cell_id: str = "",
+    language: str = "python",
+    cell_index: int = 0,
 ) -> str:
-    """Add a new code cell. Returns the new cellId. By default appends after afterCellId
-    (the cellId to insert after, from add_code_cell/get_cells); omit it to insert at the
-    top. cellIndex is a legacy positional fallback. Requires an active browser connection."""
-    if afterCellId:
-        idx = await _index_after(afterCellId)
+    """Add a new code cell. Returns the new cell_id. By default appends after after_cell_id
+    (the cell_id to insert after, from add_code_cell/get_cells); omit it to insert at the
+    top. cell_index is a legacy positional fallback. Requires an active browser connection."""
+    if after_cell_id:
+        idx = await _index_after(after_cell_id)
         if idx is None:
-            return f"No such cellId: {afterCellId}"
-        cellIndex = idx
+            return f"No such cell_id: {after_cell_id}"
+        cell_index = idx
     return await _forward_or_stub(
-        "add_code_cell", {"code": code, "cellIndex": cellIndex, "language": language}
+        "add_code_cell", {"cellIndex": cell_index, "code": code, "language": language}
     )
 
 
 @mcp.tool()
-async def cell_add_text(content: str = "", cellIndex: int = -1) -> str:
+async def cell_add_text(content: str = "", cell_index: int = -1) -> str:
     """Add a new text/markdown cell to the Colab notebook. Requires an active browser connection via open_colab_browser_connection."""
     return await _forward_or_stub(
-        "add_text_cell", {"content": content, "cellIndex": cellIndex}
+        "add_text_cell", {"content": content, "cellIndex": cell_index}
     )
 
 
@@ -265,43 +270,43 @@ async def cells_get() -> str:
 
 
 @mcp.tool()
-async def cell_run(cellId: str = "") -> str:
-    """Execute a code cell in the Colab notebook by cellId (from add_code_cell or get_cells). Blocks until the cell finishes. Requires an active browser connection via open_colab_browser_connection."""
-    return await _forward_or_stub("run_code_cell", {"cellId": cellId})
+async def cell_run(cell_id: str = "") -> str:
+    """Execute a code cell in the Colab notebook by cell_id (from add_code_cell or get_cells). Blocks until the cell finishes. Requires an active browser connection via open_colab_browser_connection."""
+    return await _forward_or_stub("run_code_cell", {"cellId": cell_id})
 
 
 @mcp.tool()
-async def cells_run(cellIds: list[str]) -> str:
-    """Run one or more cells in order WITHOUT blocking. Returns a jobId immediately;
-    poll cells_run_status(jobId) for progress and per-cell output. Use this for
+async def cells_run(cell_ids: list[str]) -> str:
+    """Run one or more cells in order WITHOUT blocking. Returns a job_id immediately;
+    poll cells_run_status(job_id) for progress and per-cell output. Use this for
     long-running cells (training, installs) so the agent isn't frozen for the whole
     run. Requires an active browser connection via open_colab_browser_connection."""
     global _run_job_seq
     if _proxy_client is None or not _proxy_client.is_connected():
         return NOT_CONNECTED_MSG
-    if not cellIds:
-        return "No cellIds provided."
+    if not cell_ids:
+        return "No cell_ids provided."
     _run_job_seq += 1
     job_id = f"run-{_run_job_seq}"
     _run_jobs[job_id] = {
         "status": "pending",
-        "cellIds": list(cellIds),
+        "cellIds": list(cell_ids),
         "current": None,
         "results": [],
     }
-    asyncio.create_task(_run_cells_job(job_id, list(cellIds)))
-    return json.dumps({"jobId": job_id, "status": "pending", "cellIds": list(cellIds)})
+    asyncio.create_task(_run_cells_job(job_id, list(cell_ids)))
+    return json.dumps({"jobId": job_id, "status": "pending", "cellIds": list(cell_ids)})
 
 
 @mcp.tool()
-async def cells_run_status(jobId: str = "") -> str:
+async def cells_run_status(job_id: str = "") -> str:
     """Read the status and captured output of an async run started by cells_run.
-    Returns status (pending|running|done|error), the currently-running cellId, and
+    Returns status (pending|running|done|error), the currently-running cell_id, and
     per-cell outputs collected so far. Reads server memory only — safe to poll."""
-    job = _run_jobs.get(jobId)
+    job = _run_jobs.get(job_id)
     if job is None:
-        return json.dumps({"error": f"No such jobId: {jobId}"})
-    return json.dumps({"jobId": jobId, **job})
+        return json.dumps({"error": f"No such job_id: {job_id}"})
+    return json.dumps({"jobId": job_id, **job})
 
 
 @mcp.tool()
@@ -333,29 +338,33 @@ async def cells_run_all() -> str:
 
 
 @mcp.tool()
-async def cell_update(cellId: str = "", content: str = "") -> str:
+async def cell_update(cell_id: str = "", content: str = "") -> str:
     """Update the contents of an existing cell in the Colab notebook. Requires an active browser connection via open_colab_browser_connection."""
-    return await _forward_or_stub("update_cell", {"cellId": cellId, "content": content})
-
-
-@mcp.tool()
-async def cell_delete(cellId: str = "") -> str:
-    """Delete a cell from the Colab notebook by cellId. Requires an active browser connection via open_colab_browser_connection."""
-    return await _forward_or_stub("delete_cell", {"cellId": cellId})
-
-
-@mcp.tool()
-async def cell_move(cellId: str = "", afterCellId: str = "", cellIndex: int = 0) -> str:
-    """Move a cell (by cellId) to just after afterCellId (another cellId). This is the
-    id-only way to reorder — no index counting. cellIndex is a legacy positional
-    fallback. Requires an active browser connection."""
-    if afterCellId:
-        idx = await _index_after(afterCellId)
-        if idx is None:
-            return f"No such cellId: {afterCellId}"
-        cellIndex = idx
     return await _forward_or_stub(
-        "move_cell", {"cellId": cellId, "cellIndex": cellIndex}
+        "update_cell", {"cellId": cell_id, "content": content}
+    )
+
+
+@mcp.tool()
+async def cell_delete(cell_id: str = "") -> str:
+    """Delete a cell from the Colab notebook by cell_id. Requires an active browser connection via open_colab_browser_connection."""
+    return await _forward_or_stub("delete_cell", {"cellId": cell_id})
+
+
+@mcp.tool()
+async def cell_move(
+    cell_id: str = "", after_cell_id: str = "", cell_index: int = 0
+) -> str:
+    """Move a cell (by cell_id) to just after after_cell_id (another cell_id). This is the
+    id-only way to reorder — no index counting. cell_index is a legacy positional
+    fallback. Requires an active browser connection."""
+    if after_cell_id:
+        idx = await _index_after(after_cell_id)
+        if idx is None:
+            return f"No such cell_id: {after_cell_id}"
+        cell_index = idx
+    return await _forward_or_stub(
+        "move_cell", {"cellId": cell_id, "cellIndex": cell_index}
     )
 
 
