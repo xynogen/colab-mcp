@@ -1,0 +1,25 @@
+[tools]
+python = "3.13"
+
+# Note: uv manages its own 3.13 interpreter for .venv (same python-build-standalone
+# build as mise's, so identical). mise here pins the `python` command + provides tasks.
+
+[tasks.lint]
+description = "ruff check + format check"
+run = ["uv run ruff check .", "uv run ruff format --check ."]
+
+[tasks.fmt]
+description = "ruff autofix + format"
+run = ["uv run ruff check --fix .", "uv run ruff format ."]
+
+[tasks.test]
+description = "pytest"
+run = "uv run pytest -q"
+
+[tasks.cov]
+description = "pytest with coverage"
+run = "uv run pytest --cov=colab_mcp --cov-report=term-missing -q"
+
+[tasks.check]
+description = "full gate: lint + test"
+depends = ["lint", "test"]
