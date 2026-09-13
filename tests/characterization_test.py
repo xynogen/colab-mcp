@@ -1,0 +1,133 @@
+# Copyright 2026 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Characterization tests: pin the CURRENT observable behavior so an accidental
+change to a message, flag default, or branch shows up as a failing test. These
+assert what the code does today, not what it ideally should do."""
+
+from types import SimpleNamespace
+
+import pytest
+
+import colab_mcp
+from colab_mcp import parse_args
+
+# --- parse_args: flag defaults and toggles ---
+
+
+def test_parse_args_defaults():
+    args = parse_args([])
+    assert args.enable_proxy is True
+    assert args.client_oauth_config is None
+    assert args.list_running is False
+    assert args.kill_stale is False
+    assert args.log  # a temp dir is allocated by default
+
+
+def test_parse_args_flags():
+    args = parse_args(["--list-running", "--kill-stale"])
+    assert args.list_running is True
+    assert args.kill_stale is True
+
+
+def test_parse_args_oauth_config():
+    args = parse_args(["--client-oauth-config", "/tmp/secrets.json"])
+    assert args.client_oauth_config == "/tmp/secrets.json"
+
+
+# --- notebook tools: not-connected stub messages ---
+
+
+@pytest.fixture
+def disconnected(monkeypatch):
+    monkeypatch.setattr(colab_mcp, "_proxy_client", None)
+
+
+@pytest.mark.asyncio
+async def test_notebook_tools_not_connected(disconnected):
+    msg = colab_mcp.NOT_CONNECTED_MSG
+    assert await colab_mcp.add_code_cell.fn(code="x") == msg
+    assert await colab_mcp.add_text_cell.fn(content="x") == msg
+    assert await colab_mcp.get_cells.fn() == msg
+    assert await colab_mcp.run_code_cell.fn(cellId="c") == msg
+    assert await colab_mcp.update_cell.fn(cellId="c", content="x") == msg
+    assert await colab_mcp.delete_cell.fn(cellId="c") == msg
+    assert await colab_mcp.move_cell.fn(cellId="c") == msg
+
+
+@pytest.mark.asyncio
+async def test_run_cells_not_connected_message(disconnected):
+    assert await colab_mcp.run_cells.fn(["c"]) == colab_mcp.NOT_CONNECTED_MSG
+    assert await colab_mcp.run_all_cells.fn() == colab_mcp.NOT_CONNECTED_MSG
+
+
+# --- open_colab_browser_connection: guard branches (no browser) ---
+
+
+@pytest.mark.asyncio
+async def test_open_connection_uninitialized(monkeypatch):
+    monkeypatch.setattr(colab_mcp, "_proxy_client", None)
+    out = await colab_mcp.open_colab_browser_connection.fn()
+    assert out == "Server not initialized. Please wait and try again."
+
+
+@pytest.mark.asyncio
+async def test_open_connection_already_connected(monkeypatch):
+    proxy = SimpleNamespace(is_connected=lambda: True)
+    monkeypatch.setattr(colab_mcp, "_proxy_client", proxy)
+    out = await colab_mcp.open_colab_browser_connection.fn()
+    assert out == "Already connected to Colab."
+
+
+@pytest.mark.asyncio
+async def test_open_connection_timeout_reports_peers(monkeypatch):
+    # Never connects; a peer server exists -> the "other servers running" branch.
+    async def never(*_):
+        return None
+
+    proxy = SimpleNamespace(
+        is_connected=lambda: False,
+        wss=SimpleNamespace(port=40000, token="tok"),
+        await_proxy_connection=never,
+    )
+    monkeypatch.setattr(colab_mcp, "_proxy_client", proxy)
+    monkeypatch.setattr(colab_mcp.webbrowser, "open_new", lambda url: None)
+    monkeypatch.setattr(
+        colab_mcp.process_registry,
+        "list_running",
+        lambda: [SimpleNamespace(pid=999, port=50000, host="127.0.0.1")],
+    )
+    out = await colab_mcp.open_colab_browser_connection.fn()
+    assert "Connection timed out" in out
+    assert "50000 (pid 999)" in out
+    assert "--kill-stale" in out
+
+
+@pytest.mark.asyncio
+async def test_open_connection_timeout_no_peers(monkeypatch):
+    async def never(*_):
+        return None
+
+    proxy = SimpleNamespace(
+        is_connected=lambda: False,
+        wss=SimpleNamespace(port=40000, token="tok"),
+        await_proxy_connection=never,
+    )
+    monkeypatch.setattr(colab_mcp, "_proxy_client", proxy)
+    monkeypatch.setattr(colab_mcp.webbrowser, "open_new", lambda url: None)
+    monkeypatch.setattr(colab_mcp.process_registry, "list_running", list)
+    out = await colab_mcp.open_colab_browser_connection.fn()
+    assert "Connection timed out" in out
+    assert "Common causes" in out
+    assert "Local Network Access" in out
