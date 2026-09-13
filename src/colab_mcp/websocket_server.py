@@ -12,21 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import anyio
-from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 import asyncio
 import logging
+import os
+import secrets
+
+import anyio
 import mcp.types as types
+import websockets
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp.shared.message import SessionMessage
 from pydantic_core import ValidationError
-import secrets
-import websockets
 from websockets.asyncio.server import ServerConnection
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 from websockets.typing import Subprotocol
-
 
 COLAB = "https://colab.research.google.com"
 COLAB_ALT_DOMAIN = "https://colab.google.com"
@@ -51,7 +52,12 @@ class ColabWebSocketServer:
         # Forcing IPv4-only binds a single socket on a single port, which
         # is what the Colab tab actually reaches via `ws://localhost:<port>`.
         self.host = host
-        self.port = 0
+        # COLAB_MCP_PORT lets a fresh server re-bind the SAME port a previous
+        # instance used, so a stale Colab tab (whose URL fragment points at that
+        # port) reconnects on refresh instead of needing a brand-new tab.
+        # 0 (default) = let the OS pick a free ephemeral port.
+        self._bind_port = int(os.environ.get("COLAB_MCP_PORT", "0") or "0")
+        self.port = self._bind_port
         self.connection_lock = asyncio.Lock()
         self.connection_live = asyncio.Event()
         self.allowed_origins = [COLAB, COLAB_ALT_DOMAIN]
@@ -68,7 +74,9 @@ class ColabWebSocketServer:
         self.write_stream, self._write_stream_reader = (
             anyio.create_memory_object_stream(0)
         )
-        self.token = secrets.token_urlsafe(16)
+        # COLAB_MCP_TOKEN pairs with COLAB_MCP_PORT: reuse the previous token so
+        # the stale tab's mcpProxyToken still authorizes against this server.
+        self.token = os.environ.get("COLAB_MCP_TOKEN") or secrets.token_urlsafe(16)
 
     async def _read_from_socket(self, websocket):
         """Listens to the socket and puts messages into the read stream."""
@@ -207,7 +215,7 @@ class ColabWebSocketServer:
         self._server = await websockets.serve(
             self._connection_handler,
             host=self.host,
-            port=0,
+            port=self._bind_port,
             subprotocols=[Subprotocol("mcp")],
             origins=self.allowed_origins,
             process_request=self._validate_authorization,

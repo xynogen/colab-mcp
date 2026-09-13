@@ -80,6 +80,26 @@ def test_default_browser_hint_respects_env(monkeypatch):
     assert colab_mcp._default_browser_hint() == "firefox"
 
 
+def test_wss_port_token_default_random(monkeypatch):
+    from colab_mcp.websocket_server import ColabWebSocketServer
+
+    monkeypatch.delenv("COLAB_MCP_PORT", raising=False)
+    monkeypatch.delenv("COLAB_MCP_TOKEN", raising=False)
+    w = ColabWebSocketServer()
+    assert w._bind_port == 0
+    assert len(w.token) >= 16
+
+
+def test_wss_port_token_env_override(monkeypatch):
+    from colab_mcp.websocket_server import ColabWebSocketServer
+
+    monkeypatch.setenv("COLAB_MCP_PORT", "35755")
+    monkeypatch.setenv("COLAB_MCP_TOKEN", "reuseme")
+    w = ColabWebSocketServer()
+    assert w._bind_port == 35755
+    assert w.token == "reuseme"
+
+
 @pytest.mark.asyncio
 async def test_open_connection_uninitialized(monkeypatch):
     monkeypatch.setattr(colab_mcp, "_proxy_client", None)
