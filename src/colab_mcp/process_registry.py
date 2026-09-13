@@ -57,6 +57,55 @@ def _registry_path() -> Path:
     return _registry_dir() / "registry.json"
 
 
+def _identity_path() -> Path:
+    return _registry_dir() / "identity.json"
+
+
+def load_identity() -> dict:
+    """Return the persisted {port, token}, or {} if missing/corrupt.
+
+    Persisting the websocket port+token to disk means a restarted server keeps
+    the SAME address, so a Colab tab reconnects on its own after a reload
+    instead of pointing at a now-dead random port. Delete the file to reset.
+    """
+    p = _identity_path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text())
+        if isinstance(data.get("port"), int) and isinstance(data.get("token"), str):
+            return {"port": data["port"], "token": data["token"]}
+    except (json.JSONDecodeError, OSError, AttributeError):
+        pass
+    return {}
+
+
+def save_identity(port: int, token: str) -> None:
+    """Persist the websocket port+token so the next server run reuses them."""
+    d = _registry_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    try:
+        _identity_path().write_text(json.dumps({"port": port, "token": token}))
+    except OSError as exc:
+        logger.warning(f"Could not persist server identity: {exc}")
+
+
+def clear_identity() -> bool:
+    """Delete the persisted identity so the next run gets a fresh port+token.
+
+    Returns True if a file was removed.
+    """
+    p = _identity_path()
+    try:
+        p.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        logger.warning(f"Could not clear server identity: {exc}")
+        return False
+
+
 def _load_registry() -> List[ServerEntry]:
     p = _registry_path()
     if not p.exists():

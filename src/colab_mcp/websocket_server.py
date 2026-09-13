@@ -52,11 +52,18 @@ class ColabWebSocketServer:
         # Forcing IPv4-only binds a single socket on a single port, which
         # is what the Colab tab actually reaches via `ws://localhost:<port>`.
         self.host = host
-        # COLAB_MCP_PORT lets a fresh server re-bind the SAME port a previous
-        # instance used, so a stale Colab tab (whose URL fragment points at that
-        # port) reconnects on refresh instead of needing a brand-new tab.
-        # 0 (default) = let the OS pick a free ephemeral port.
-        self._bind_port = int(os.environ.get("COLAB_MCP_PORT", "0") or "0")
+        # Server identity (port + token) precedence, so a restarted server keeps
+        # the SAME address and a Colab tab reconnects on its own after a reload:
+        #   1. COLAB_MCP_PORT / COLAB_MCP_TOKEN env (explicit override)
+        #   2. ~/.colab-mcp/identity.json persisted from a prior run
+        #   3. random (first ever run) — then persisted on successful bind
+        # Delete identity.json to reset. If the persisted port is taken by
+        # another live server, __aenter__ falls back to a random port.
+        from colab_mcp import process_registry
+
+        self._identity = process_registry.load_identity()
+        env_port = os.environ.get("COLAB_MCP_PORT")
+        self._bind_port = int(env_port or self._identity.get("port") or 0)
         self.port = self._bind_port
         self.connection_lock = asyncio.Lock()
         self.connection_live = asyncio.Event()
@@ -74,9 +81,12 @@ class ColabWebSocketServer:
         self.write_stream, self._write_stream_reader = (
             anyio.create_memory_object_stream(0)
         )
-        # COLAB_MCP_TOKEN pairs with COLAB_MCP_PORT: reuse the previous token so
-        # the stale tab's mcpProxyToken still authorizes against this server.
-        self.token = os.environ.get("COLAB_MCP_TOKEN") or secrets.token_urlsafe(16)
+        # Token: env override, else persisted, else fresh random.
+        self.token = (
+            os.environ.get("COLAB_MCP_TOKEN")
+            or self._identity.get("token")
+            or secrets.token_urlsafe(16)
+        )
 
     async def _read_from_socket(self, websocket):
         """Listens to the socket and puts messages into the read stream."""
@@ -211,16 +221,31 @@ class ColabWebSocketServer:
             finally:
                 self.connection_live.clear()
 
-    async def __aenter__(self):
-        self._server = await websockets.serve(
+    async def _serve(self, port: int):
+        return await websockets.serve(
             self._connection_handler,
             host=self.host,
-            port=self._bind_port,
+            port=port,
             subprotocols=[Subprotocol("mcp")],
             origins=self.allowed_origins,
             process_request=self._validate_authorization,
             process_response=self._augment_handshake_response,
         )
+
+    async def __aenter__(self):
+        try:
+            self._server = await self._serve(self._bind_port)
+        except OSError as exc:
+            # Persisted/requested port is taken by another live server; fall
+            # back to a random one so we still start (that other server owns
+            # the identity for now).
+            if self._bind_port == 0:
+                raise
+            logging.warning(
+                f"Port {self._bind_port} unavailable ({exc}); using a random port."
+            )
+            self._bind_port = 0
+            self._server = await self._serve(0)
 
         # Defense against the dual-stack bind bug: with host="localhost"
         # and port=0, websockets binds IPv4 and IPv6 on DIFFERENT ephemeral
@@ -247,6 +272,15 @@ class ColabWebSocketServer:
         for sock in self._server.sockets:
             logging.info(f"WebSocket server listening on {sock.getsockname()}")
         logging.info(f"Colab tab will connect via ws://localhost:{self.port}")
+
+        # Persist this port+token so the next server run reuses them and a Colab
+        # tab reconnects on its own after a reload. Only when we actually bound
+        # our intended port (not the random fallback), so we don't overwrite a
+        # still-live peer's identity.
+        if self._bind_port != 0:
+            from colab_mcp import process_registry
+
+            process_registry.save_identity(self.port, self.token)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

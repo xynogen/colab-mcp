@@ -519,6 +519,13 @@ def parse_args(v):
         action="store_true",
         default=False,
     )
+    parser.add_argument(
+        "--reset-identity",
+        help="Delete the persisted port+token (~/.colab-mcp/identity.json) so the "
+        "next server run gets a fresh random port+token, then exit.",
+        action="store_true",
+        default=False,
+    )
     return parser.parse_args(v)
 
 
@@ -561,6 +568,12 @@ async def main_async():
             print(f"Terminated {len(removed)} stale colab-mcp server(s):")
             for e in removed:
                 print(f"  pid={e.pid} port={e.port}")
+        return
+    if args.reset_identity:
+        if process_registry.clear_identity():
+            print("Cleared persisted identity; next run gets a fresh port+token.")
+        else:
+            print("No persisted identity to clear.")
         return
 
     # Prune any dead entries from prior crashed runs BEFORE we bind a port.

@@ -80,14 +80,42 @@ def test_default_browser_hint_respects_env(monkeypatch):
     assert colab_mcp._default_browser_hint() == "firefox"
 
 
-def test_wss_port_token_default_random(monkeypatch):
+def test_wss_port_token_default_random(monkeypatch, tmp_path):
+    from colab_mcp import process_registry
     from colab_mcp.websocket_server import ColabWebSocketServer
 
     monkeypatch.delenv("COLAB_MCP_PORT", raising=False)
     monkeypatch.delenv("COLAB_MCP_TOKEN", raising=False)
+    # No persisted identity -> random.
+    monkeypatch.setattr(process_registry, "_registry_dir", lambda: tmp_path)
     w = ColabWebSocketServer()
     assert w._bind_port == 0
     assert len(w.token) >= 16
+
+
+def test_identity_roundtrip_and_clear(monkeypatch, tmp_path):
+    from colab_mcp import process_registry
+
+    monkeypatch.setattr(process_registry, "_registry_dir", lambda: tmp_path)
+    assert process_registry.load_identity() == {}
+    process_registry.save_identity(40123, "tok")
+    assert process_registry.load_identity() == {"port": 40123, "token": "tok"}
+    assert process_registry.clear_identity() is True
+    assert process_registry.load_identity() == {}
+    assert process_registry.clear_identity() is False
+
+
+def test_wss_reuses_persisted_identity(monkeypatch, tmp_path):
+    from colab_mcp import process_registry
+    from colab_mcp.websocket_server import ColabWebSocketServer
+
+    monkeypatch.delenv("COLAB_MCP_PORT", raising=False)
+    monkeypatch.delenv("COLAB_MCP_TOKEN", raising=False)
+    monkeypatch.setattr(process_registry, "_registry_dir", lambda: tmp_path)
+    process_registry.save_identity(40123, "persisted-tok")
+    w = ColabWebSocketServer()
+    assert w._bind_port == 40123
+    assert w.token == "persisted-tok"
 
 
 def test_wss_port_token_env_override(monkeypatch):
@@ -112,6 +140,11 @@ def test_cli_notebook_url_flag():
     a = colab_mcp.parse_args(["--notebook-url", "https://x/drive/abc"])
     assert a.notebook_url == "https://x/drive/abc"
     assert colab_mcp.parse_args([]).notebook_url is None
+
+
+def test_cli_reset_identity_flag():
+    assert colab_mcp.parse_args(["--reset-identity"]).reset_identity is True
+    assert colab_mcp.parse_args([]).reset_identity is False
 
 
 @pytest.mark.asyncio
