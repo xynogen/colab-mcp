@@ -164,7 +164,7 @@ async def test_open_connection_uses_env_notebook_url(monkeypatch):
     monkeypatch.setattr(colab_mcp, "_proxy_client", proxy)
     monkeypatch.setattr(colab_mcp, "_connect_in_flight", False)
     monkeypatch.setattr(colab_mcp.process_registry, "prune_dead", lambda: 0)
-    monkeypatch.setattr(colab_mcp.process_registry, "list_running", lambda: [])
+    monkeypatch.setattr(colab_mcp.process_registry, "list_running", list)
     monkeypatch.setattr(
         colab_mcp.webbrowser, "open_new", lambda url: opened.setdefault("url", url)
     )

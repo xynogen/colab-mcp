@@ -29,10 +29,8 @@ import os
 import signal
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Optional
-
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +104,7 @@ def clear_identity() -> bool:
         return False
 
 
-def _load_registry() -> List[ServerEntry]:
+def _load_registry() -> list[ServerEntry]:
     p = _registry_path()
     if not p.exists():
         return []
@@ -118,7 +116,7 @@ def _load_registry() -> List[ServerEntry]:
         return []
 
 
-def _save_registry(entries: List[ServerEntry]) -> None:
+def _save_registry(entries: list[ServerEntry]) -> None:
     d = _registry_dir()
     d.mkdir(parents=True, exist_ok=True)
     p = _registry_path()
@@ -176,15 +174,15 @@ def _kill_process(pid: int, *, force: bool = False) -> bool:
     return not _is_process_alive(pid)
 
 
-def cleanup_stale(*, kill: bool = True) -> List[ServerEntry]:
+def cleanup_stale(*, kill: bool = True) -> list[ServerEntry]:
     """Prune dead entries from the registry. If kill=True, also terminate any
     still-alive entries (used by --kill-stale, NOT by normal startup).
 
     Returns the list of entries that were removed.
     """
     entries = _load_registry()
-    removed: List[ServerEntry] = []
-    alive: List[ServerEntry] = []
+    removed: list[ServerEntry] = []
+    alive: list[ServerEntry] = []
     for e in entries:
         if not _is_process_alive(e.pid):
             removed.append(e)
@@ -228,7 +226,7 @@ def register(port: int, host: str = "localhost") -> ServerEntry:
     return entry
 
 
-def unregister(pid: Optional[int] = None) -> None:
+def unregister(pid: int | None = None) -> None:
     """Remove an entry. Defaults to current process."""
     if pid is None:
         pid = os.getpid()
@@ -237,6 +235,6 @@ def unregister(pid: Optional[int] = None) -> None:
     _save_registry(entries)
 
 
-def list_running() -> List[ServerEntry]:
+def list_running() -> list[ServerEntry]:
     """Return all currently-registered (and still-alive) servers."""
     return [e for e in _load_registry() if _is_process_alive(e.pid)]
