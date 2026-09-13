@@ -182,7 +182,7 @@ async def _index_after(after_cell_id: str) -> int | None:
 
 
 @mcp.tool()
-async def add_code_cell(
+async def cell_add_code(
     code: str = "", afterCellId: str = "", language: str = "python", cellIndex: int = 0
 ) -> str:
     """Add a new code cell. Returns the new cellId. By default appends after afterCellId
@@ -199,7 +199,7 @@ async def add_code_cell(
 
 
 @mcp.tool()
-async def add_text_cell(content: str = "", cellIndex: int = -1) -> str:
+async def cell_add_text(content: str = "", cellIndex: int = -1) -> str:
     """Add a new text/markdown cell to the Colab notebook. Requires an active browser connection via open_colab_browser_connection."""
     return await _forward_or_stub(
         "add_text_cell", {"content": content, "cellIndex": cellIndex}
@@ -207,21 +207,21 @@ async def add_text_cell(content: str = "", cellIndex: int = -1) -> str:
 
 
 @mcp.tool()
-async def get_cells() -> str:
+async def cells_get() -> str:
     """Read the current notebook state: list of cells with their IDs, contents, and outputs. Essential for iterative work (write -> run -> read -> adjust). Requires an active browser connection via open_colab_browser_connection."""
     return await _forward_or_stub("get_cells", {})
 
 
 @mcp.tool()
-async def run_code_cell(cellId: str = "") -> str:
+async def cell_run(cellId: str = "") -> str:
     """Execute a code cell in the Colab notebook by cellId (from add_code_cell or get_cells). Blocks until the cell finishes. Requires an active browser connection via open_colab_browser_connection."""
     return await _forward_or_stub("run_code_cell", {"cellId": cellId})
 
 
 @mcp.tool()
-async def run_cells(cellIds: list[str]) -> str:
+async def cells_run(cellIds: list[str]) -> str:
     """Run one or more cells in order WITHOUT blocking. Returns a jobId immediately;
-    poll get_run_status(jobId) for progress and per-cell output. Use this for
+    poll cells_run_status(jobId) for progress and per-cell output. Use this for
     long-running cells (training, installs) so the agent isn't frozen for the whole
     run. Requires an active browser connection via open_colab_browser_connection."""
     global _run_job_seq
@@ -242,8 +242,8 @@ async def run_cells(cellIds: list[str]) -> str:
 
 
 @mcp.tool()
-async def get_run_status(jobId: str = "") -> str:
-    """Read the status and captured output of an async run started by run_cells.
+async def cells_run_status(jobId: str = "") -> str:
+    """Read the status and captured output of an async run started by cells_run.
     Returns status (pending|running|done|error), the currently-running cellId, and
     per-cell outputs collected so far. Reads server memory only — safe to poll."""
     job = _run_jobs.get(jobId)
@@ -253,10 +253,10 @@ async def get_run_status(jobId: str = "") -> str:
 
 
 @mcp.tool()
-async def run_all_cells() -> str:
+async def cells_run_all() -> str:
     """Run every code cell in the notebook in order, WITHOUT blocking. Reads the current
-    cell list, then starts an async job like run_cells. Returns a jobId immediately;
-    poll get_run_status(jobId) for progress. Requires an active browser connection."""
+    cell list, then starts an async job like cells_run. Returns a jobId immediately;
+    poll cells_run_status(jobId) for progress. Requires an active browser connection."""
     global _run_job_seq
     if _proxy_client is None or not _proxy_client.is_connected():
         return NOT_CONNECTED_MSG
@@ -281,19 +281,19 @@ async def run_all_cells() -> str:
 
 
 @mcp.tool()
-async def update_cell(cellId: str = "", content: str = "") -> str:
+async def cell_update(cellId: str = "", content: str = "") -> str:
     """Update the contents of an existing cell in the Colab notebook. Requires an active browser connection via open_colab_browser_connection."""
     return await _forward_or_stub("update_cell", {"cellId": cellId, "content": content})
 
 
 @mcp.tool()
-async def delete_cell(cellId: str = "") -> str:
+async def cell_delete(cellId: str = "") -> str:
     """Delete a cell from the Colab notebook by cellId. Requires an active browser connection via open_colab_browser_connection."""
     return await _forward_or_stub("delete_cell", {"cellId": cellId})
 
 
 @mcp.tool()
-async def move_cell(cellId: str = "", afterCellId: str = "", cellIndex: int = 0) -> str:
+async def cell_move(cellId: str = "", afterCellId: str = "", cellIndex: int = 0) -> str:
     """Move a cell (by cellId) to just after afterCellId (another cellId). This is the
     id-only way to reorder — no index counting. cellIndex is a legacy positional
     fallback. Requires an active browser connection."""

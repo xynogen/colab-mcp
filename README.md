@@ -1,320 +1,180 @@
 # Colab MCP (Enhanced Fork)
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.13-blue.svg)](pyproject.toml)
 [![MCP](https://img.shields.io/badge/protocol-MCP-purple.svg)](https://modelcontextprotocol.io)
-[![Stars](https://img.shields.io/github/stars/SebastianGilPinzon/colab-mcp?style=social)](https://github.com/SebastianGilPinzon/colab-mcp)
 
-An MCP server for controlling Google Colab from any AI coding agent. This fork fixes the bugs in the [official repo](https://github.com/googlecolab/colab-mcp) that block real day-to-day use and restores features Google removed upstream.
+An MCP server for controlling Google Colab from any AI coding agent. Forked from
+[`SebastianGilPinzon/colab-mcp`](https://github.com/SebastianGilPinzon/colab-mcp) (itself a
+fork of the official [`googlecolab/colab-mcp`](https://github.com/googlecolab/colab-mcp)):
+Sebastian fixed the bugs that block day-to-day use and restored the GPU control Google
+removed; this fork adds a non-blocking cell runner plus runtime status/stop tools.
 
-## Why This Fork?
+## Why this fork
 
-Three concrete dolores that the official `googlecolab/colab-mcp` doesn't solve — and that this fork does:
+The official `googlecolab/colab-mcp` has three blockers this fork solves:
 
-1. **Invisible tools** ([#54](https://github.com/googlecolab/colab-mcp/discussions/54), [#67](https://github.com/googlecolab/colab-mcp/discussions/67), [#69](https://github.com/googlecolab/colab-mcp/discussions/69)) — only `open_colab_browser_connection` appears in most MCP clients (Claude Code, Codex, Kiro IDE). The notebook tools rely on `notifications/tools/list_changed`, which these clients ignore. Without `get_cells` in particular, the bridge is effectively write-only: an agent can add cells but can't read state back.
-2. **"Disconnected from the local Colab MCP server"** ([#84](https://github.com/googlecolab/colab-mcp/discussions/84)) — orphaned servers from prior Claude Code sessions hold ports that your browser tab still points at. Reconnecting from the tab silently fails.
-3. **No programmatic GPU control** — Google [removed](https://github.com/googlecolab/colab-mcp/discussions/41) the `--enable-runtime` feature entirely. You can't assign T4 / L4 / A100 without clicking in the browser.
-
-This fork fixes all three. All 9 tools (1 connection + 7 notebook + 1 GPU control) appear immediately, stale servers are auto-detected and clean-uppable, and GPUs are assignable from a single tool call.
-
-> _Demo coming soon: `docs/demo.gif` (TODO — short asciinema of `change_runtime` → `add_code_cell` → `run_code_cell`)._
-
-## What's Different
-
-| Feature | Official | This Fork |
-|---------|----------|-----------|
-| Notebook tools visible at startup | No (needs browser + list_changed) | Yes (pre-registered, works with any client) |
-| `change_runtime` tool (GPU control) | Removed | Working via OAuth |
-| OAuth token caching | N/A | Yes (authorize once, cached forever) |
-| Windows compatibility | Port 53919 blocked | Fixed (port 8085) |
-| ColabClient initialization | N/A | Fixed (Prod() env argument) |
-| Stale-server detection / cleanup | None — silent "Disconnected" | `--list-running` + `--kill-stale`, registry pruning on startup |
+1. **Invisible tools** ([#67](https://github.com/googlecolab/colab-mcp/discussions/67), [#69](https://github.com/googlecolab/colab-mcp/discussions/69)) — notebook tools rely on `notifications/tools/list_changed`, which most clients (Claude Code, Codex, Kiro) ignore, so only `open_colab_browser_connection` shows up. This fork pre-registers all tools at startup.
+2. **"Disconnected from the local Colab MCP server"** ([#84](https://github.com/googlecolab/colab-mcp/discussions/84)) — root cause is an IPv4/IPv6 dual-stack bind (two sockets, different ports, tab reaches the wrong one). Fixed by forcing IPv4-only, plus a process registry (`--list-running`/`--kill-stale`) for orphaned servers.
+3. **No programmatic GPU control** — Google [removed](https://github.com/googlecolab/colab-mcp/discussions/41) it. Restored via OAuth (`runtime_change`).
 
 ## Available Tools
 
-| Tool | Requires Browser | Requires OAuth | Description |
+| Tool | Browser | OAuth | Description |
 |------|:---:|:---:|-------------|
-| `change_runtime` | | Yes | Assign GPU: T4, L4, A100, or NONE |
-| `open_colab_browser_connection` | Yes | | Connect to a Colab notebook in your browser |
-| `add_code_cell` | Yes | | Add a code cell to the notebook |
-| `add_text_cell` | Yes | | Add a markdown cell |
-| `get_cells` | Yes | | Read current notebook state (cells, IDs, contents, outputs) |
-| `run_code_cell` | Yes | | Execute a code cell by `cellId` |
-| `update_cell` | Yes | | Edit an existing cell by `cellId` |
-| `delete_cell` | Yes | | Delete a cell by `cellId` |
-| `move_cell` | Yes | | Move a cell to a new position by `cellId` |
+| `open_colab_browser_connection` | ✓ | | Connect to Colab. Optional `notebook_url` opens a specific notebook (Drive URL, `#scrollTo=` preserved); empty creates a fresh notebook |
+| `cell_add_code` | ✓ | | Add a code cell → returns the new `cellId`. Optional `afterCellId` places it after a known cell |
+| `cell_add_text` | ✓ | | Add a markdown cell |
+| `cell_run` | ✓ | | Execute a cell by `cellId` — **blocks** until it finishes |
+| `cell_update` | ✓ | | Edit a cell by `cellId` |
+| `cell_delete` | ✓ | | Delete a cell by `cellId` |
+| `cell_move` | ✓ | | Move a cell — id-relative via `afterCellId` (or legacy `cellIndex`) |
+| `cells_get` | ✓ | | Read notebook state (cell IDs, contents, outputs) |
+| `cells_run` | ✓ | | Run a list of `cellIds` in order, **non-blocking** → returns a `jobId` |
+| `cells_run_all` | ✓ | | Run every code cell in order, **non-blocking** → returns a `jobId` |
+| `cells_run_status` | ✓ | | Poll a `jobId` for status + per-cell output (safe to poll; reads server memory) |
+| `runtime_change` | | ✓ | Assign accelerator: T4/L4/A100 (GPU), V2-8/V5E-1/V6E-1 (TPU), or NONE |
+| `runtime_status` | | ✓ | Report subscription tier, credit balance, hourly burn rate, assigned VMs |
+| `runtime_stop` | | ✓ | Unassign all VMs to stop credit consumption |
 
-> **Note:** `execute_cell` was renamed to `run_code_cell` in 2026-06-16 to match the browser-side handler name. Pass a `cellId` (from `add_code_cell` or `get_cells`) — the old `cellIndex` fallback was removed.
+Tools are grouped by object: `cell_*` (single cell), `cells_*` (whole-notebook / batch),
+`runtime_*` (GPU/TPU). **For long cells (training, installs)** use `cells_run`/`cells_run_all` —
+they return a `jobId` immediately instead of freezing the agent for the whole run; poll
+`cells_run_status(jobId)`.
 
-## Quick Start (Without OAuth)
+## Quick Start
 
-If you just want the notebook tools (no `change_runtime`):
-
-### 1. Install uv
+Install [uv](https://docs.astral.sh/uv/) (do **not** `pip install uv` — it lacks features):
 
 ```bash
-# Windows (PowerShell)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-
 # Mac/Linux
 curl -LsSf https://astral.sh/uv/install.sh | sh
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-**Important:** Do NOT use `pip install uv` — that version lacks required features.
-
-### 2. Clone this repo
-
-```bash
-git clone https://github.com/SebastianGilPinzon/colab-mcp.git
-```
-
-### 3. Configure your MCP client
-
-Add to your `.mcp.json` (Claude Code, Cursor, etc.):
+Add to your MCP client config (Claude Code, Cursor, etc.). Run from a clone:
 
 ```json
 {
   "mcpServers": {
-    "colab-proxy-mcp": {
+    "colab-mcp": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/colab-mcp", "colab-mcp"],
-      "timeout": 30000
+      "args": ["run", "--directory", "/path/to/colab-mcp", "colab-mcp"]
     }
   }
 }
 ```
 
-### 4. Use it
-
-1. Restart your editor / reload window
-2. All 8 tools should appear immediately (`open_colab_browser_connection` + 7 notebook tools)
-3. Call `open_colab_browser_connection` — a Colab notebook opens in your browser
-4. Use `add_code_cell`, `run_code_cell`, `get_cells`, etc. to control the notebook
-
----
-
-## Full Setup (With OAuth + GPU Control)
-
-This enables the `change_runtime` tool, which lets your agent assign GPUs without you touching the browser.
-
-### 1. Create OAuth Credentials
-
-You need a Google Cloud project with OAuth configured. This is a one-time setup (~5 minutes):
-
-1. **Create a GCP project** (or use an existing one):
-   ```bash
-   gcloud projects create colab-mcp-oauth --name="Colab MCP OAuth"
-   ```
-
-2. **Configure OAuth consent screen:**
-   - Go to [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent)
-   - Select "External" > Create
-   - App name: `Colab MCP`, add your email as support + developer contact
-   - Save through all steps
-
-3. **Add yourself as test user:**
-   - On the consent screen page > "Test users" > Add your Google email
-
-4. **Create OAuth client ID:**
-   - Go to [Credentials](https://console.cloud.google.com/apis/credentials)
-   - Create Credentials > OAuth client ID > Desktop app
-   - Download the JSON file
-   - Save it somewhere safe (e.g., `~/.config/colab-oauth.json`)
-
-> **Note:** OAuth Client IDs can only be created via the Cloud Console web UI. There is no CLI or API for this.
-
-### 2. Configure MCP with OAuth
+…or straight from git (no clone):
 
 ```json
 {
   "mcpServers": {
-    "colab-proxy-mcp": {
-      "command": "uv",
-      "args": [
-        "run", "--directory", "/path/to/colab-mcp",
-        "colab-mcp",
-        "--client-oauth-config", "/path/to/colab-oauth.json"
-      ],
-      "timeout": 30000
-    }
+    "colab-mcp": { "command": "uvx", "args": ["git+https://github.com/xynogen/colab-mcp"] }
   }
 }
 ```
 
-### 3. Authorize (first time only)
+Restart your editor. All tools appear immediately. Call `open_colab_browser_connection`
+(a Colab tab opens — accept Chrome's **Local Network Access** prompt if shown), then use
+`cell_add_code`, `cell_run`, `cells_get`, etc.
 
-The first time the server starts, it opens your browser for Google OAuth consent. Sign in, click Allow, done. The token is cached at `~/.colab-mcp-auth-token.json` and auto-refreshes — you won't be asked again.
+## GPU / TPU Control (OAuth)
 
-### 4. Use it
+Enables `runtime_change` / `runtime_status` / `runtime_stop`. One-time setup:
 
-```
-Agent: change_runtime(accelerator="T4")
-> Runtime changed to T4. Endpoint: gpu-t4-s-xxx
+1. Create a GCP project and [configure the OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent) ("External"), adding your Google email as a **test user**.
+2. [Create Credentials](https://console.cloud.google.com/apis/credentials) → OAuth client ID → **Desktop app** → download the JSON (e.g. `~/.config/colab-oauth.json`). (Client IDs can only be created in the web console.)
+3. Add `--client-oauth-config` to your config args:
 
-Agent: open_colab_browser_connection()
-> Connected. Available notebook tools: add_code_cell, add_text_cell, get_cells, run_code_cell, update_cell, delete_cell, move_cell
-
-Agent: add_code_cell(code="!nvidia-smi")
-> {"cellId": "abc123", ...}
-
-Agent: run_code_cell(cellId="abc123")
-> Tesla T4, 15GB memory...
-
-Agent: get_cells()
-> [{"cellId": "abc123", "code": "!nvidia-smi", "outputs": [...]}]
+```json
+"args": ["run", "--directory", "/path/to/colab-mcp", "colab-mcp",
+         "--client-oauth-config", "/path/to/colab-oauth.json"]
 ```
 
----
+First start opens the browser for consent; the token caches to `~/.colab-mcp-auth-token.json`
+and auto-refreshes. Example flow:
+
+```
+runtime_change(accelerator="T4")     → Runtime changed to T4. Endpoint: gpu-t4-s-xxx
+open_colab_browser_connection()      → Connection successful. Available notebook tools: …
+cell_add_code(code="!nvidia-smi")    → {"newCellId": "abc123"}
+cell_run(cellId="abc123")            → Tesla T4, 15GB …
+runtime_stop()                       → Stopped 1 runtime(s)
+```
 
 ## CLI Reference
 
-Once installed (via `uv run` or `uvx git+https://github.com/SebastianGilPinzon/colab-mcp`), the `colab-mcp` command supports these flags:
-
 | Flag | Description |
 |------|-------------|
-| _(none)_ | Start the MCP server (default — reads/writes JSON-RPC on stdin/stdout) |
-| `-l DIR`, `--log DIR` | Write logs to `DIR`. Defaults to a temp dir under `%TEMP%` / `$TMPDIR` |
-| `-p`, `--enable-proxy` | Enable the runtime proxy that exposes browser-based notebook tools. On by default |
-| `--client-oauth-config PATH` | Path to OAuth client-secrets JSON. Enables the `change_runtime` tool for programmatic GPU assignment |
-| `--list-running` | Print every currently-running `colab-mcp` server (pid, port, host, start time) and exit. Useful when "Disconnected from the local Colab MCP server" appears |
-| `--kill-stale` | Terminate every running `colab-mcp` server, clear its registry entry, and exit. Use this from a regular shell (NOT from inside Claude Code) before starting a fresh session |
+| _(none)_ | Start the MCP server (JSON-RPC on stdin/stdout) |
+| `-l DIR`, `--log DIR` | Log directory (default: temp dir under `$TMPDIR`/`%TEMP%`) |
+| `--client-oauth-config PATH` | OAuth client-secrets JSON; enables the `runtime_*` tools |
+| `--list-running` | List running `colab-mcp` servers (pid, port, host, start time) and exit |
+| `--kill-stale` | Terminate all running servers + clear the registry, then exit |
 
-The server maintains a tiny registry at `%LOCALAPPDATA%\colab-mcp\registry.json` (Windows) or `~/.colab-mcp/registry.json` (macOS/Linux). Each running instance writes a `{pid, port, host, started_at}` entry on startup and removes it on clean shutdown. Stale entries from crashed processes are pruned automatically the next time `colab-mcp` starts.
+Run `--list-running` / `--kill-stale` from a **regular shell**, not from inside your agent
+(which is itself an MCP instance). The server keeps a registry at `~/.colab-mcp/registry.json`
+(`%LOCALAPPDATA%\colab-mcp\registry.json` on Windows), pruning dead entries on startup.
 
 ## Troubleshooting
 
-### Tools don't appear after setup
-- Make sure you're using this fork, not the official repo
-- Only define `colab-proxy-mcp` in ONE `.mcp.json` file (not both global and project — dual definitions spawn two server instances and one dies silently)
-- Restart your editor after changing `.mcp.json`
+**Tools don't appear** — you're on this fork (not the official repo); define the server in
+only ONE config file; restart your editor.
 
-### `change_runtime` returns "Runtime API not initialized"
-- Check that `--client-oauth-config` is in your `.mcp.json` args
-- Check that the OAuth JSON file exists at the specified path
-- Look at the server logs for the specific error:
-  ```bash
-  # Find the latest log
-  ls -t $TMPDIR/colab-mcp-logs-*/colab-mcp.*.log | head -1 | xargs cat
-  ```
-- A healthy log shows: `INFO:Colab API client ready`
-- If you see `WARNING:Failed to initialize Colab API client`, check the error message
+**`runtime_*` says "Runtime API not initialized"** — `--client-oauth-config` missing or the
+JSON path is wrong. Check the latest log (`ls -t $TMPDIR/colab-mcp-logs-*/colab-mcp.*.log | head -1 | xargs cat`) for `INFO:Colab API client ready`.
 
-### Windows: Port blocked error (WinError 10013)
-Already fixed in this fork (changed to port 8085). If you still hit it, edit `src/colab_mcp/auth.py` and change `OAUTH_SERVER_PORT` to any open port.
+**OAuth "Access denied"** — add your Google email as a test user on the consent screen.
 
-### OAuth says "Access denied"
-Add your Google email as a test user in Cloud Console > OAuth consent screen > Test users.
+**Browser opens but times out** — this is almost always Chrome's **Local Network Access** policy.
+A public site (colab.research.google.com) talking to `ws://localhost` is blocked by default:
 
-### Browser opens but connection times out
-Make sure you have a Colab notebook open in the browser tab that opened. Click "Connect" if prompted.
+- On the prompt, click **Allow**. If you previously clicked **Block**, Chrome remembers it per-site and silently cancels every attempt. Reset via the lock icon → _Reset permissions_, or `chrome://settings/content/siteDetails?site=https%3A%2F%2Fcolab.research.google.com` → set "Access other devices on the network" to **Ask**. Edge/Firefox are unaffected.
 
-### Chrome reused an old Colab tab pointing at a dead port
+**Stale tab / "Disconnected"** — an old Colab tab points at a dead port. Close every
+`colab.research.google.com` tab and retry (each server uses a unique `?p=<port>` URL so
+Chrome opens a fresh tab). If it persists, run `colab-mcp --kill-stale` from a shell to clear
+orphaned servers, then reconnect.
 
-Chrome dedupes tabs by URL canonical (ignoring the `#fragment`), so when an old Colab tab is still open with a fragment pointing at a previous server's port, calling `open_colab_browser_connection` again may silently focus the old tab instead of opening a fresh one. The old tab shows "Disconnected from the local Colab MCP server" and the new server times out.
+**Windows port blocked (WinError 10013)** — fixed in this fork (port 8085). If it recurs,
+change `OAUTH_SERVER_PORT` in `src/colab_mcp/auth.py`.
 
-This fork mitigates that by appending the current port as a query param (`?p=<port>`) to the Colab URL, so each server instance produces a unique URL that Chrome can't dedupe. If you still hit it after upgrading:
-
-1. Close every `colab.research.google.com` tab in your browser.
-2. Retry `open_colab_browser_connection` — it will open a fresh tab pointed at the live server.
-
-### Chrome silently blocks every connection attempt after one previous "Block"
-
-If Chrome shows "Disconnected from the local Colab MCP server" on *every* attempt — including immediately after the page loads, with no permission prompt — and the server logs only `stream ends after 0 bytes` (TCP opens then closes without any HTTP request), the most likely cause is that you previously clicked **"Block"** on the Local Network Access prompt for `colab.research.google.com`. Chrome remembers that choice **per site** and never asks again — every WebSocket attempt is silently cancelled before the handshake. Edge / Firefox / other Chromium profiles are unaffected.
-
-**Fix (Chrome):**
-1. Open `chrome://settings/content/siteDetails?site=https%3A%2F%2Fcolab.research.google.com`
-2. Find **"Access other devices on the network"** / **"Acceder a otros dispositivos en la red"** / Insecure content
-3. Change from **Block** to **Ask**
-4. Reload the Colab tab and accept the prompt when it appears.
-
-Quickest reset (clears all Colab site permissions):
-1. Open `https://colab.research.google.com`
-2. Click the **lock icon** next to the URL
-3. Click **"Reset permissions"** / **"Restablecer permisos"**
-4. Reload and try again.
-
-This was reproduced and root-caused with a manual E2E test (`scripts/manual_browser_test.py`): Edge connected on first attempt, Chrome timed out indefinitely until the per-site permission was reset.
-
-### Chrome asks for "Permission to access other services and apps on this device" (or Colab says "Disconnected")
-
-When the Colab tab loads, Chrome shows a permission prompt:
-
-> **colab.research.google.com wants — Permission to access other services and apps on this device**
-
-**Click _Allow_.** If you block it, the WebSocket connection from the Colab tab to your local `colab-mcp` server is blocked, the tab shows "Disconnected from the local Colab MCP server", and `open_colab_browser_connection` will time out.
-
-This prompt is Chrome's **Local Network Access** policy: a public site (`https://colab.research.google.com`) is asking to talk to a resource on your local network (`ws://localhost:<port>` where `colab-mcp` is listening). Chrome blocks this by default and asks the user. The "other service" in the prompt is **your own `colab-mcp` server running on your machine** — not external access. The connection is scoped to a one-time token in the URL fragment (`#mcpProxyToken=...`), so even on the same machine other processes can't piggy-back on it.
-
-Chrome remembers the choice per-site, so you only need to allow it once for `colab.research.google.com`.
-
-### "Disconnected from the local Colab MCP server" — IPv4/IPv6 dual-stack bind (root cause)
-
-If you saw this message on the official `googlecolab/colab-mcp` and assumed it was an orphaned-server issue, the **actual root cause** is different — and is fixed in this fork.
-
-With `host="localhost"` + `port=0`, the `websockets` library binds **two sockets on different ephemeral ports** (one for IPv6 `::1` and one for IPv4 `127.0.0.1`), then reports only one of them as the "server port". The Colab tab opens `ws://localhost:<reported-port>`, Chrome resolves `localhost` to either address family, and connects to a port with **no listener** in 50% of cases. The TCP connection drops with `stream ends after 0 bytes` server-side, the Colab tab shows "Disconnected from the local Colab MCP server" instantly, and the user waits 60s for a generic timeout.
-
-This fork forces IPv4-only (`host="127.0.0.1"`) so there is exactly one socket on exactly one port, and asserts this invariant at startup (raising `RuntimeError` if a future change re-introduces the dual-bind). See [`websocket_server.py`](src/colab_mcp/websocket_server.py) and the tests `test_single_socket_single_port` / `test_default_host_is_ipv4`.
-
-### Orphaned colab-mcp processes (separate issue)
-
-If a Colab tab in your browser shows **"Disconnected from the local Colab MCP server"** and re-clicking *Connect* doesn't help, the cause is almost always one or more **orphaned colab-mcp processes** from previous Claude Code sessions. Each instance picks a random ephemeral port, but your Colab tab only remembers the port from the URL fragment used when it first opened — when that server dies (or you spawn a new Claude Code session with a new server on a different port), the tab keeps trying to reach a dead address.
-
-This fork ships with built-in diagnostics. Run any of these from a **regular shell** (not from inside Claude Code, which is itself running an MCP instance):
+## Development
 
 ```bash
-# Show every colab-mcp server currently registered as running
-uv run --directory /path/to/colab-mcp colab-mcp --list-running
-
-# Terminate orphaned colab-mcp servers, then exit
-uv run --directory /path/to/colab-mcp colab-mcp --kill-stale
+mise run check   # lint + test  (needs mise; else: uv run ruff check . && uv run pytest)
+mise run test    # pytest
+mise run cov     # pytest + coverage
 ```
 
-The server writes a small registry file at `%LOCALAPPDATA%\colab-mcp\registry.json` (Windows) or `~/.colab-mcp/registry.json` (macOS/Linux) listing pid + port for each running instance. On every startup it prunes dead entries automatically, and on clean shutdown it removes its own. If `open_colab_browser_connection` times out from inside Claude Code, the new error message also includes the ports + pids of any peer servers so you can identify which one your browser tab is actually pointed at.
+## Changes from upstream
 
-After cleaning up, re-run `open_colab_browser_connection` — it will open a fresh Colab tab pointed at the current (only) server's port + token.
+Fixes: pre-register all tools at startup (invisible-tools, [#67](https://github.com/googlecolab/colab-mcp/discussions/67)/[#69](https://github.com/googlecolab/colab-mcp/discussions/69)) ·
+restore `runtime_change` GPU control via OAuth · fix `ColabClient` init + Windows OAuth port ·
+match real Colab API signatures · IPv4-only bind + Private Network Access headers (real cause of
+"Disconnected", [#84](https://github.com/googlecolab/colab-mcp/discussions/84)) · stale-server registry with `--list-running`/`--kill-stale`.
 
-Fixes [upstream issue #84](https://github.com/googlecolab/colab-mcp/discussions/84).
+Later additions in this fork:
 
----
+- **`notebook_url`** on `open_colab_browser_connection` — open a specific notebook, or create a fresh one when empty.
+- **Non-blocking runner** — `cells_run` / `cells_run_all` / `cells_run_status`, so long cells don't freeze the agent.
+- **`runtime_status` + `runtime_stop`** — expose credit balance, burn rate, assigned VMs, and an off switch.
+- **`runtime_*` rename** (`change_runtime`→`runtime_change`, `stop_runtime`→`runtime_stop`) + TPU variant fix.
+- **id-based placement** — `afterCellId` on `cell_add_code`/`cell_move` instead of integer positions.
+- **`cell_*` / `cells_*` / `runtime_*` naming** — tools grouped by object for a cleaner surface.
+- **Tooling** — `pyrightconfig.json`, `mise.toml`, and a 67-test suite (~65% coverage).
 
-## Compatibility
-
-Tested with:
-- Claude Code (VS Code extension + CLI)
-- Should work with any MCP client that supports the standard tool protocol (Cursor, Windsurf, Codex, etc.)
-
-Supported platforms:
-- Windows 10/11
-- macOS
-- Linux
-
----
-
-## Changes from Upstream
-
-This fork is based on [`googlecolab/colab-mcp`](https://github.com/googlecolab/colab-mcp) with these changes:
-
-- **`f70c00d`** Register notebook tools directly on the FastMCP server at startup (fixes invisible tools)
-- **`cae498b`** Add `change_runtime` tool with OAuth for programmatic GPU assignment
-- **`440e3bc`** Fix `ColabClient` initialization (missing `Prod()` env arg) + change OAuth port to 8085 for Windows
-- **`e66ee69`** Match real Colab API signatures (language param, cellId, run_code_cell)
-- **stale-server detection** Process registry + `--list-running` / `--kill-stale` flags + clearer timeout diagnostics — fixes [upstream #84](https://github.com/googlecolab/colab-mcp/discussions/84) "Disconnected from the local Colab MCP server"
-- **full 7-tool notebook surface** — pre-register `get_cells`, `delete_cell`, `move_cell` (previously missing) and rename `execute_cell` → `run_code_cell` to match the browser-side handler. Closes [upstream #69](https://github.com/googlecolab/colab-mcp/discussions/69).
-
-Google [does not accept external contributions](https://github.com/googlecolab/colab-mcp/blob/main/CONTRIBUTING.md) to the official repo, so these fixes live here.
-
-## Verified fixes (accepted in upstream discussions)
-
-- **[#67 → answered](https://github.com/googlecolab/colab-mcp/discussions/67)** — invisible-tools fix (this fork's pre-registration approach was accepted by the upstream community as the working solution).
-- **[#69](https://github.com/googlecolab/colab-mcp/discussions/69)** — follow-up on `get_cells` and the remaining missing stubs — addressed in this fork on 2026-06-16.
-- **[#84](https://github.com/googlecolab/colab-mcp/discussions/84)** — "Disconnected from the local Colab MCP server" — addressed via the stale-server registry + `--kill-stale` CLI.
-
----
+Google [does not accept external contributions](https://github.com/googlecolab/colab-mcp/blob/main/CONTRIBUTING.md), so these live here.
 
 ## License
 
-Apache 2.0 (same as upstream)
+Apache License 2.0 (same as upstream). Fork chain:
+[`googlecolab/colab-mcp`](https://github.com/googlecolab/colab-mcp) →
+[`SebastianGilPinzon/colab-mcp`](https://github.com/SebastianGilPinzon/colab-mcp) →
+[`xynogen/colab-mcp`](https://github.com/xynogen/colab-mcp).
 
----
-
-⭐ **If this fork saved you time, a star helps others find it.**
+Copyright 2026 Google Inc. (original) · Sebastian Gil Pinzón (fork fixes) · Muhammad Fikri
+(xynogen, this fork). All distributed under Apache 2.0 — the original copyright and license
+notices are retained in every source file per §4 of the license. See [LICENSE](LICENSE).

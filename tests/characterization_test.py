@@ -57,19 +57,19 @@ def disconnected(monkeypatch):
 @pytest.mark.asyncio
 async def test_notebook_tools_not_connected(disconnected):
     msg = colab_mcp.NOT_CONNECTED_MSG
-    assert await colab_mcp.add_code_cell.fn(code="x") == msg
-    assert await colab_mcp.add_text_cell.fn(content="x") == msg
-    assert await colab_mcp.get_cells.fn() == msg
-    assert await colab_mcp.run_code_cell.fn(cellId="c") == msg
-    assert await colab_mcp.update_cell.fn(cellId="c", content="x") == msg
-    assert await colab_mcp.delete_cell.fn(cellId="c") == msg
-    assert await colab_mcp.move_cell.fn(cellId="c") == msg
+    assert await colab_mcp.cell_add_code.fn(code="x") == msg
+    assert await colab_mcp.cell_add_text.fn(content="x") == msg
+    assert await colab_mcp.cells_get.fn() == msg
+    assert await colab_mcp.cell_run.fn(cellId="c") == msg
+    assert await colab_mcp.cell_update.fn(cellId="c", content="x") == msg
+    assert await colab_mcp.cell_delete.fn(cellId="c") == msg
+    assert await colab_mcp.cell_move.fn(cellId="c") == msg
 
 
 @pytest.mark.asyncio
 async def test_run_cells_not_connected_message(disconnected):
-    assert await colab_mcp.run_cells.fn(["c"]) == colab_mcp.NOT_CONNECTED_MSG
-    assert await colab_mcp.run_all_cells.fn() == colab_mcp.NOT_CONNECTED_MSG
+    assert await colab_mcp.cells_run.fn(["c"]) == colab_mcp.NOT_CONNECTED_MSG
+    assert await colab_mcp.cells_run_all.fn() == colab_mcp.NOT_CONNECTED_MSG
 
 
 # --- open_colab_browser_connection: guard branches (no browser) ---

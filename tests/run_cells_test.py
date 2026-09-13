@@ -44,14 +44,14 @@ async def _call(tool):
 @pytest.mark.asyncio
 async def test_run_cells_not_connected(monkeypatch):
     monkeypatch.setattr(colab_mcp, "_proxy_client", None)
-    out = await colab_mcp.run_cells.fn(["a"])
+    out = await colab_mcp.cells_run.fn(["a"])
     assert out == colab_mcp.NOT_CONNECTED_MSG
 
 
 @pytest.mark.asyncio
 async def test_run_cells_empty_list(monkeypatch):
     monkeypatch.setattr(colab_mcp, "_proxy_client", _connected_proxy())
-    out = await colab_mcp.run_cells.fn([])
+    out = await colab_mcp.cells_run.fn([])
     assert "No cellIds" in out
 
 
@@ -65,17 +65,17 @@ async def test_run_cells_lifecycle_done(monkeypatch):
 
     monkeypatch.setattr(colab_mcp, "_forward_or_stub", fake_forward)
 
-    start = json.loads(await colab_mcp.run_cells.fn(["c1", "c2"]))
+    start = json.loads(await colab_mcp.cells_run.fn(["c1", "c2"]))
     assert start["status"] == "pending"
     job_id = start["jobId"]
 
     # Returned immediately, before work completed.
-    mid = json.loads(await colab_mcp.get_run_status.fn(job_id))
+    mid = json.loads(await colab_mcp.cells_run_status.fn(job_id))
     assert mid["status"] in ("pending", "running")
 
     # Let the background task finish.
     await asyncio.sleep(0.1)
-    done = json.loads(await colab_mcp.get_run_status.fn(job_id))
+    done = json.loads(await colab_mcp.cells_run_status.fn(job_id))
     assert done["status"] == "done"
     assert [r["cellId"] for r in done["results"]] == ["c1", "c2"]
     assert done["results"][0]["output"] == "output for c1"
@@ -93,9 +93,9 @@ async def test_run_cells_stops_on_error(monkeypatch):
 
     monkeypatch.setattr(colab_mcp, "_forward_or_stub", fake_forward)
 
-    job_id = json.loads(await colab_mcp.run_cells.fn(["good", "bad", "never"]))["jobId"]
+    job_id = json.loads(await colab_mcp.cells_run.fn(["good", "bad", "never"]))["jobId"]
     await asyncio.sleep(0.05)
-    st = json.loads(await colab_mcp.get_run_status.fn(job_id))
+    st = json.loads(await colab_mcp.cells_run_status.fn(job_id))
     assert st["status"] == "error"
     # Stopped at the failing cell; the third never ran.
     assert [r["cellId"] for r in st["results"]] == ["good", "bad"]
@@ -103,7 +103,7 @@ async def test_run_cells_stops_on_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_run_status_unknown_job():
-    out = json.loads(await colab_mcp.get_run_status.fn("nope"))
+    out = json.loads(await colab_mcp.cells_run_status.fn("nope"))
     assert "error" in out
 
 
@@ -131,8 +131,8 @@ async def test_add_code_cell_after_id(monkeypatch):
         return "{}"
 
     monkeypatch.setattr(colab_mcp, "_forward_or_stub", fake_forward)
-    await colab_mcp.add_code_cell.fn(code="x", afterCellId="a")
+    await colab_mcp.cell_add_code.fn(code="x", afterCellId="a")
     assert sent["add_code_cell"]["cellIndex"] == 1  # resolved from id "a"
 
-    bad = await colab_mcp.add_code_cell.fn(code="x", afterCellId="nope")
+    bad = await colab_mcp.cell_add_code.fn(code="x", afterCellId="nope")
     assert "No such cellId" in bad
