@@ -483,6 +483,21 @@ def parse_args(v):
         default=None,
     )
     parser.add_argument(
+        "--port",
+        help="Bind the browser websocket to this fixed port instead of a random "
+        "one. Lets a restarted server re-adopt a stale Colab tab on refresh. "
+        "Overrides COLAB_MCP_PORT.",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--token",
+        help="Use this fixed proxy token instead of a random one. Pair with "
+        "--port so a stale tab's mcpProxyToken still authorizes. Overrides "
+        "COLAB_MCP_TOKEN.",
+        default=None,
+    )
+    parser.add_argument(
         "--list-running",
         help="List all currently-running colab-mcp servers and exit.",
         action="store_true",
@@ -514,6 +529,13 @@ async def main_async():
     global _proxy_client, _session_mcp, _colab_client
     args = parse_args(sys.argv[1:])
     init_logger(args.log)
+
+    # CLI flags win over env; the websocket server reads these env vars when it
+    # constructs, so setting them here keeps env as the single source of truth.
+    if args.port is not None:
+        os.environ["COLAB_MCP_PORT"] = str(args.port)
+    if args.token is not None:
+        os.environ["COLAB_MCP_TOKEN"] = args.token
 
     # Diagnostic / cleanup flags exit early.
     if args.list_running:

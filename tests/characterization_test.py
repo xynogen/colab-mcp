@@ -100,6 +100,14 @@ def test_wss_port_token_env_override(monkeypatch):
     assert w.token == "reuseme"
 
 
+def test_cli_port_token_flags():
+    a = colab_mcp.parse_args(["--port", "41000", "--token", "tk"])
+    assert a.port == 41000
+    assert a.token == "tk"
+    b = colab_mcp.parse_args([])
+    assert b.port is None and b.token is None
+
+
 @pytest.mark.asyncio
 async def test_open_connection_uninitialized(monkeypatch):
     monkeypatch.setattr(colab_mcp, "_proxy_client", None)
